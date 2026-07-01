@@ -280,7 +280,10 @@ import re as _re_tp  # import local pour ne pas polluer le namespace module
 # Utiliser \b (word boundary) pour éviter les faux positifs.
 _TOOL_PATTERNS: list[tuple[str, list[str]]] = [
     ("meteo", [
-        r"\btemps\b", r"\bmétéo\b", r"\btempérature\b", r"\bpluie\b",
+        # "\btemps\b" retiré : false positive sur "passe du bon temps", "temps libre", etc.
+        # Remplacé par des constructions météo explicites.
+        r"\bquel temps\b", r"\btemps qu'il fait\b",
+        r"\bmétéo\b", r"\btempérature\b", r"\bpluie\b",
         r"\bsoleil\b", r"\bnuage\b", r"\bvent\b", r"\bparapluie\b",
         r"il fait quel", r"fait.il chaud", r"\bfait chaud\b", r"\bfait froid\b",
         r"risque de pluie", r"prévisions météo", r"météo semaine",
@@ -306,7 +309,10 @@ _TOOL_PATTERNS: list[tuple[str, list[str]]] = [
         r"qu'est.ce que j'ai copié",
     ]),
     ("musique_spotify", [
-        r"\bjoue\b", r"\bjouer\b", r"met de la musique", r"mets de la musique",
+        # "\bjoue\b"/"\bjouer\b" → exclut "joue/jouer au/aux/à" (sport, jeu vidéo)
+        r"\bjoue(?!\s+(?:au|aux|à)(?:\s|$))\b",
+        r"\bjouer(?!\s+(?:au|aux|à)(?:\s|$))\b",
+        r"met de la musique", r"mets de la musique",
         r"lance spotify", r"pause musique", r"stop spotify",
         r"piste suivante", r"track suivant", r"c'est quoi cette chanson",
         r"qu'est.ce qui joue", r"en cours de lecture", r"passe la suivante",
@@ -314,10 +320,11 @@ _TOOL_PATTERNS: list[tuple[str, list[str]]] = [
         r"joue.moi", r"balance de la musique", r"balance un son",
         r"mets un peu de musique", r"un peu de musique", r"\bde la musique\b",
         r"ambiance musicale", r"quelque chose à écouter",
-        r"\bdu rap\b", r"\bdu jazz\b", r"\bdu lofi\b", r"\bdu r&b\b",
-        r"\bde la pop\b", r"de l'électronique", r"\bdu chaabi\b",
-        r"\bdu raï\b", r"\bdu rai\b", r"musique de fond", r"fond musical",
+        r"musique de fond", r"fond musical",
         r"\bqui chante\b",
+        # Genres : uniquement avec verbe d'action musical (évite les faux positifs culturels).
+        # Ex. "c'est quoi l'histoire du jazz" → aucun verbe → pas de match.
+        r"(?:joue|mets|balance|écoute|écouter|lance|passe|veux|aime)\b.{0,40}(?:du jazz|du rap|du lofi|du r&b|de la pop|de l.électronique|du chaabi|du raï|du rai|du rock)",
     ]),
     ("volume", [
         r"monte le son", r"baisse le son", r"coupe le son",

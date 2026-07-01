@@ -519,14 +519,15 @@ class CommandProcessor:
 
         raw_parts = []
 
-        # 1-3. Météo + Obsidian + Calendrier en parallèle
+        # 1-4. Météo + Obsidian + Calendrier + Emails en parallèle
         _api_tasks = {
-            "meteo":    (execute_tool, "meteo",     {"ville": "Charleroi"}),
-            "obsidian": (execute_tool, "obsidian",  {"action": "agenda", "requete": ""}),
+            "meteo":    (execute_tool, "meteo",      {"ville": "Charleroi"}),
+            "obsidian": (execute_tool, "obsidian",   {"action": "agenda", "requete": ""}),
             "cal":      (execute_tool, "calendrier", {"action": "lire"}),
+            "emails":   (execute_tool, "emails",     {"action": "lire_derniers"}),
         }
         _api_results: dict = {}
-        with ThreadPoolExecutor(max_workers=3) as _pool:
+        with ThreadPoolExecutor(max_workers=4) as _pool:
             _futures = {
                 _pool.submit(fn, tool, args): key
                 for key, (fn, tool, args) in _api_tasks.items()
@@ -541,6 +542,7 @@ class CommandProcessor:
         weather = _api_results.get("meteo") or ""
         agenda  = _api_results.get("obsidian") or ""
         cal     = _api_results.get("cal") or ""
+        emails  = _api_results.get("emails") or ""
 
         if weather and "indisponible" not in weather.lower():
             raw_parts.append(f"MÉTÉO: {weather}")
@@ -548,6 +550,8 @@ class CommandProcessor:
             raw_parts.append(f"AGENDA OBSIDIAN: {agenda}")
         if cal and "aucun" not in cal.lower() and "indisponible" not in cal.lower():
             raw_parts.append(f"CALENDRIER: {cal}")
+        if emails and "aucun" not in emails.lower() and "indisponible" not in emails.lower():
+            raw_parts.append(f"EMAILS: {emails}")
 
         # 4. Mémoire persistante — derniers rappels
         if self.persistent_memory:

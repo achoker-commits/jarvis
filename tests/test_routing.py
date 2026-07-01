@@ -107,3 +107,60 @@ def test_no_tool_simple_question():
 
 def test_no_tool_greeting():
     assert _route("comment tu vas ?") == ""
+
+
+# ── Faux positifs connus — 15 cas dont les pièges ─────────────────────────────
+
+# Piège 1 : "du jazz" dans contexte culturel/historique → PAS de Spotify
+def test_fp_histoire_du_jazz():
+    assert _route("c'est quoi l'histoire du jazz ?") != "musique_spotify"
+
+def test_fp_histoire_du_rap():
+    assert _route("l'histoire du rap en France") != "musique_spotify"
+
+def test_fp_inventeur_du_jazz():
+    assert _route("qui a inventé le jazz ?") != "musique_spotify"
+
+# Piège 2 : "joue" de sport ou jeu vidéo → PAS de Spotify
+def test_fp_joue_au_foot():
+    assert _route("il joue au foot tous les week-ends") != "musique_spotify"
+
+def test_fp_joue_aux_cartes():
+    assert _route("tu veux jouer aux cartes ce soir ?") != "musique_spotify"
+
+def test_fp_joue_a_la_ps5():
+    assert _route("je joue à la PS5 ce soir") != "musique_spotify"
+
+# Piège 3 : "temps" au sens de durée/période → PAS de météo
+def test_fp_bon_temps():
+    assert _route("il passe du bon temps en vacances") != "meteo"
+
+def test_fp_temps_libre():
+    assert _route("j'ai du temps libre demain") != "meteo"
+
+def test_fp_prendre_le_temps():
+    assert _route("il faut prendre le temps de vivre") != "meteo"
+
+# Piège 4 : "printemps" ne déclenche pas météo (\btemps\b était fautif)
+def test_fp_printemps():
+    assert _route("le printemps arrive enfin") != "meteo"
+
+# ── Vrais positifs à préserver après les corrections ──────────────────────────
+
+# Genres avec verbe → DOIT déclencher Spotify
+def test_tp_mets_du_jazz():
+    assert _route("mets du jazz s'il te plaît") == "musique_spotify"
+
+def test_tp_ecouter_du_rap():
+    assert _route("j'aimerais écouter du rap") == "musique_spotify"
+
+def test_tp_balance_du_lofi():
+    assert _route("balance du lofi") == "musique_spotify"
+
+# Météo avec "quel temps" → DOIT déclencher météo
+def test_tp_quel_temps_fait_il():
+    assert _route("quel temps fait-il à Bruxelles ?") == "meteo"
+
+# Joue sans sport → DOIT déclencher Spotify
+def test_tp_joue_quelque_chose():
+    assert _route("joue quelque chose de chill") == "musique_spotify"
