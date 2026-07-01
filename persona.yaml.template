@@ -1,0 +1,50 @@
+# persona.yaml.template — Copier en persona.yaml et remplir
+# cp persona.yaml.template persona.yaml
+
+user:
+  name: "Prénom Nom"
+  first_name: "Prénom"
+  age: 0
+  city: "Ville"
+  address: "Adresse complète"
+  country: "Pays"
+  languages: "langue1, langue2"
+  family_context: "contexte familial ou personnel utile pour le ton"
+
+business:
+  name: "Nom de l'entreprise"
+  role: "Rôle / titre"
+  website: "https://exemple.com"
+  channels: "canaux de vente / marketing utilisés"
+  goal: "objectif principal"
+  description: "description courte de l'activité"
+
+clients:
+  - "Client 1"
+  - "Client 2"
+  - "Client 3"
+
+nexatel:
+  savings_pct: "XX%"
+  prices:
+    light_fiber:  "~XX€/mois (boutique : ~XX€) → économie ~XX€/mois"
+    maxi_fiber:   "~XX€/mois (boutique : ~XX€) → économie ~XX€/mois"
+    giga_fiber:   "~XX€/mois (boutique : ~XX€) → économie ~XX€/mois"
+    pack_tv:      "~XX€/mois (boutique : ~XX€) → économie ~XX€/mois"
+    pack_complet: "~XX€/mois (boutique : ~XX€)"
+    installation: "GRATUITE (boutique : XX€)"
+  arguments:
+    orange: >
+      Argument pour un client Orange.
+    voo: >
+      Argument pour un client VOO.
+    proximus_boutique: >
+      Argument pour un client Proximus boutique.
+    objection_arnaque: >
+      Réponse à l'objection "c'est une arnaque ?".
+    objection_reseau: >
+      Réponse à l'objection "même réseau ?".
+  rules:
+    - "Règle absolue 1"
+    - "Règle absolue 2"
+    - "Règle absolue 3"

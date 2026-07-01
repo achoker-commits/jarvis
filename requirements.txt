@@ -1,0 +1,83 @@
+# JARVIS — Dépendances Python
+# Installez avec : pip install -r requirements.txt
+
+# --- LLM (Groq — gratuit, llama-3.3-70b-versatile) ---
+groq>=0.9.0
+
+# --- Speech-to-Text — faster-whisper (priorité) ---
+faster-whisper>=1.0.0
+
+# --- Speech-to-Text — Whisper standard (fallback) ---
+openai-whisper>=20231117
+
+# --- Text-to-Speech — Edge TTS (priorité, gratuit, voix Rémy) ---
+edge-tts>=6.1.9
+
+# --- Text-to-Speech — pyttsx3 (fallback offline) ---
+pyttsx3>=2.90
+
+# --- Interface visuelle PyQt6 ---
+PyQt6>=6.6.0
+
+# --- Audio capture & playback ---
+sounddevice>=0.4.6
+soundfile>=0.12.1
+pyaudio>=0.2.14
+
+# --- Voice Activity Detection ---
+webrtcvad>=2.0.10
+
+# --- Noise reduction ---
+noisereduce>=3.0.0
+
+# --- Numerical / Scientific ---
+numpy>=1.24.0
+scipy>=1.11.0
+
+# --- Système (batterie, CPU, RAM, disque) ---
+psutil>=5.9.0
+
+# --- Interface terminal ---
+rich>=13.7.0
+
+# --- Configuration ---
+python-dotenv>=1.0.0
+
+# --- YAML (frontmatter Obsidian) ---
+PyYAML>=6.0.1
+
+# --- HTTP ---
+requests>=2.31.0
+
+# --- Bourse / Finance (cours actions via Yahoo Finance) ---
+yfinance>=0.2.40
+
+# ===========================================================================
+# OPTIONNEL — Wake word offline (modèle ~50MB)
+# ===========================================================================
+# openwakeword>=0.6.0
+
+# ===========================================================================
+# OPTIONNEL — Hotkey fallback (nécessite droits root sur Linux)
+# ===========================================================================
+# keyboard>=0.13.5
+
+# ===========================================================================
+# OPTIONNEL — Wake word Picovoice (nécessite clé gratuite sur picovoice.ai)
+# ===========================================================================
+# pvporcupine>=3.0.0
+
+# ===========================================================================
+# OPTIONNEL — Wake word Vosk (modèle à télécharger séparément)
+# ===========================================================================
+# vosk>=0.3.45
+
+# ===========================================================================
+# OPTIONNEL — TTS premium ElevenLabs (payant — non utilisé par défaut)
+# ===========================================================================
+# elevenlabs>=1.3.0
+
+# ===========================================================================
+# OPTIONNEL — TTS OpenAI (payant — non utilisé par défaut)
+# ===========================================================================
+# openai>=1.0.0

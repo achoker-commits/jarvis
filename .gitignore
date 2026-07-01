@@ -1,0 +1,49 @@
+# Secrets — NE JAMAIS committer
+.env
+persona.yaml
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+
+# Environnements virtuels
+venv/
+env/
+.venv/
+
+# Logs JARVIS
+*.log
+jarvis.log
+jarvis_error.log
+
+# Cache TTS
+~/.jarvis_tts_cache/
+
+# Cache Obsidian (généré automatiquement)
+.jarvis_vault_cache.json
+~/.jarvis_vault_cache.json
+
+# Données persistantes (personnelles)
+~/.jarvis_memory.json
+
+# Build PyQt6
+build/
+dist/
+*.spec
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# Éditeurs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
