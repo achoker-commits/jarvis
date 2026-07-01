@@ -7,9 +7,6 @@ groq>=0.9.0
 # --- Speech-to-Text — faster-whisper (priorité) ---
 faster-whisper>=1.0.0
 
-# --- Speech-to-Text — Whisper standard (fallback) ---
-openai-whisper>=20231117
-
 # --- Text-to-Speech — Edge TTS (priorité, gratuit, voix Rémy) ---
 edge-tts>=6.1.9
 

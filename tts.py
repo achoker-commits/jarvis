@@ -11,9 +11,6 @@ import logging
 import os
 import queue
 import re
-import subprocess
-import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -58,6 +55,8 @@ EDGE_VOICES = {
     "femme_be":    "fr-BE-IsabelleNeural",   # Voix féminine belge
 }
 DEFAULT_EDGE_VOICE = "fr-FR-HenriNeural"
+
+_CACHE_MAX_BYTES = 500 * 1024 * 1024  # 500 MB
 
 
 class TTSEngine:
@@ -159,65 +158,6 @@ class TTSEngine:
     # Edge TTS (async → sync wrapper)
     # ------------------------------------------------------------------
 
-    def _speak_edge_tts(self, text: str) -> None:
-        """Génère et joue l'audio via Edge TTS via la boucle asyncio persistante."""
-        if not text.strip():
-            return
-        try:
-            future = asyncio.run_coroutine_threadsafe(
-                self._edge_tts_play(text), self._loop
-            )
-            future.result(timeout=30)
-        except Exception as e:
-            logger.error(f"Edge TTS speak échoué : {e}")
-            print(f"\n[JARVIS] {text}\n")
-
-    async def _edge_tts_play(self, text: str) -> None:
-        """Génère audio Edge TTS et le joue via afplay (non-bloquant async)."""
-        communicate = edge_tts.Communicate(text, voice=self._edge_voice)
-        audio_chunks = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_chunks.append(chunk["data"])
-            if self._stop_event.is_set():
-                return
-
-        if not audio_chunks:
-            logger.warning("Edge TTS : aucun audio généré")
-            return
-
-        audio_bytes = b"".join(audio_chunks)
-        logger.debug(f"Edge TTS : {len(audio_bytes)} bytes générés pour '{text[:40]}'")
-
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-
-        try:
-            if sys.platform == "darwin":
-                # asyncio.create_subprocess_exec = non-bloquant, correct en async
-                proc = await asyncio.create_subprocess_exec(
-                    "afplay", tmp_path,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.wait()
-            elif sys.platform.startswith("linux"):
-                proc = await asyncio.create_subprocess_exec(
-                    "mpg123", "-q", tmp_path,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.wait()
-            else:
-                os.startfile(tmp_path)
-                await asyncio.sleep(5)
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
-
     async def _edge_tts_to_bytes(self, text: str) -> bytes:
         """Génère audio Edge TTS et retourne les bytes MP3."""
         communicate = edge_tts.Communicate(text, voice=self._edge_voice)
@@ -257,6 +197,19 @@ class TTSEngine:
         key = self._cache_key(text)
         path = self._cache_dir / f"{key}.mp3"
         try:
+            # Éviction LRU si cache > 500MB
+            try:
+                files = list(self._cache_dir.glob("*.mp3"))
+                total = sum(f.stat().st_size for f in files)
+                if total + len(audio) > _CACHE_MAX_BYTES:
+                    for f in sorted(files, key=lambda x: x.stat().st_atime):
+                        freed = f.stat().st_size
+                        f.unlink()
+                        total -= freed
+                        if total + len(audio) <= _CACHE_MAX_BYTES:
+                            break
+            except Exception:
+                pass
             path.write_bytes(audio)
         except Exception:
             pass
@@ -282,6 +235,21 @@ class TTSEngine:
                 except Exception:
                     pass
         threading.Thread(target=_warm, daemon=True, name="TTS-Prewarm").start()
+
+    def speak_filler(self, phrases: list | None = None) -> None:
+        """Joue instantanément une phrase depuis le cache TTS (non-bloquant, < 5ms)."""
+        if self._silent_mode or self._active_engine == "none":
+            return
+        candidates = phrases or ["Une seconde.", "Je cherche l'information.", "D'accord."]
+        for phrase in candidates:
+            cached = self._load_from_file_cache(phrase)
+            if cached:
+                threading.Thread(
+                    target=lambda a=cached: play_audio_bytes(a, fmt="mp3"),
+                    daemon=True,
+                    name="TTS-Filler",
+                ).start()
+                return
 
     def speak(self, text: str) -> None:
         """Synthétise et joue du texte.

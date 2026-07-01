@@ -263,16 +263,15 @@ def play_audio_bytes(audio_bytes: bytes, fmt: str = "mp3") -> None:
     if not audio_bytes:
         return
 
-    # WAV via sounddevice + soundfile
-    if fmt == "wav":
-        try:
-            buf = io.BytesIO(audio_bytes)
-            data, samplerate = sf.read(buf, dtype="float32")
-            sd.play(data, samplerate)
-            sd.wait()
-            return
-        except Exception as e:
-            logger.warning(f"sounddevice WAV échoué : {e}")
+    # Lecture en mémoire via soundfile/sounddevice (pas de tempfile ni subprocess)
+    try:
+        buf = io.BytesIO(audio_bytes)
+        data, samplerate = sf.read(buf, dtype="float32")
+        sd.play(data, samplerate)
+        sd.wait()
+        return
+    except Exception:
+        pass  # soundfile ne supporte pas ce format → fallback subprocess
 
     # Fichier temporaire + outil système
     tmp_path = None

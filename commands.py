@@ -7,6 +7,7 @@ Tout le reste (météo, apps, web, musique, volume...) est géré par le tool ca
 import logging
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional, Tuple
 
@@ -518,29 +519,35 @@ class CommandProcessor:
 
         raw_parts = []
 
-        # 1. Météo
-        try:
-            weather = execute_tool("meteo", {"ville": "Charleroi"})
-            if weather and "indisponible" not in weather.lower():
-                raw_parts.append(f"MÉTÉO: {weather}")
-        except Exception:
-            pass
+        # 1-3. Météo + Obsidian + Calendrier en parallèle
+        _api_tasks = {
+            "meteo":    (execute_tool, "meteo",     {"ville": "Charleroi"}),
+            "obsidian": (execute_tool, "obsidian",  {"action": "agenda", "requete": ""}),
+            "cal":      (execute_tool, "calendrier", {"action": "lire"}),
+        }
+        _api_results: dict = {}
+        with ThreadPoolExecutor(max_workers=3) as _pool:
+            _futures = {
+                _pool.submit(fn, tool, args): key
+                for key, (fn, tool, args) in _api_tasks.items()
+            }
+            for _fut in as_completed(_futures, timeout=10):
+                _key = _futures[_fut]
+                try:
+                    _api_results[_key] = _fut.result()
+                except Exception:
+                    _api_results[_key] = None
 
-        # 2. Agenda Obsidian
-        try:
-            agenda = execute_tool("obsidian", {"action": "agenda", "requete": ""})
-            if agenda and "Aucun" not in agenda:
-                raw_parts.append(f"AGENDA OBSIDIAN: {agenda}")
-        except Exception:
-            pass
+        weather = _api_results.get("meteo") or ""
+        agenda  = _api_results.get("obsidian") or ""
+        cal     = _api_results.get("cal") or ""
 
-        # 3. Calendrier macOS
-        try:
-            cal = execute_tool("calendrier", {"action": "lire"})
-            if cal and "aucun" not in cal.lower() and "indisponible" not in cal.lower():
-                raw_parts.append(f"CALENDRIER: {cal}")
-        except Exception:
-            pass
+        if weather and "indisponible" not in weather.lower():
+            raw_parts.append(f"MÉTÉO: {weather}")
+        if agenda and "Aucun" not in agenda:
+            raw_parts.append(f"AGENDA OBSIDIAN: {agenda}")
+        if cal and "aucun" not in cal.lower() and "indisponible" not in cal.lower():
+            raw_parts.append(f"CALENDRIER: {cal}")
 
         # 4. Mémoire persistante — derniers rappels
         if self.persistent_memory:

@@ -273,6 +273,127 @@ Si l'utilisateur mentionne un rendez-vous, un prénom, une préférence personne
 {notes_context}"""
 
 
+import re as _re_tp  # import local pour ne pas polluer le namespace module
+
+# Patterns déclaratifs pour le routage d'outils.
+# Liste ordonnée de (outil, [regex_patterns]) — première correspondance gagne.
+# Utiliser \b (word boundary) pour éviter les faux positifs.
+_TOOL_PATTERNS: list[tuple[str, list[str]]] = [
+    ("meteo", [
+        r"\btemps\b", r"\bmétéo\b", r"\btempérature\b", r"\bpluie\b",
+        r"\bsoleil\b", r"\bnuage\b", r"\bvent\b", r"\bparapluie\b",
+        r"il fait quel", r"fait.il chaud", r"\bfait chaud\b", r"\bfait froid\b",
+        r"risque de pluie", r"prévisions météo", r"météo semaine",
+        r"météo cette semaine", r"météo les prochains jours",
+        r"prévisions de la semaine", r"prévisions pour",
+    ]),
+    ("systeme", [
+        r"\bbatterie\b", r"\bbattery\b", r"charge mac", r"charge du mac",
+        r"combien de batterie", r"\bautonomie\b",
+        r"\bcpu\b", r"\bprocesseur\b", r"\bram\b", r"mémoire vive", r"mémoire ram",
+        r"disque dur", r"état du mac", r"etat du mac", r"état système",
+        r"performances mac", r"mon mac chauffe",
+        r"\bwifi\b", r"connexion réseau", r"internet connecté", r"quel wifi",
+        r"\bluminosité\b", r"baisse la luminosité", r"monte la luminosité",
+        r"trop lumineux", r"trop sombre", r"règle la luminosité",
+        r"capture d'écran", r"\bscreenshot\b", r"fais une capture", r"capture l'écran",
+        r"mode sombre", r"dark mode", r"thème sombre", r"passe en sombre",
+        r"mode clair", r"light mode", r"thème clair",
+        r"ne pas déranger", r"do not disturb", r"coupe les notifications",
+        r"mode focus mac", r"silence les notifications",
+        r"montre le bureau", r"affiche le bureau", r"show desktop",
+        r"presse.papier", r"presse papier", r"\bclipboard\b",
+        r"qu'est.ce que j'ai copié",
+    ]),
+    ("musique_spotify", [
+        r"\bjoue\b", r"\bjouer\b", r"met de la musique", r"mets de la musique",
+        r"lance spotify", r"pause musique", r"stop spotify",
+        r"piste suivante", r"track suivant", r"c'est quoi cette chanson",
+        r"qu'est.ce qui joue", r"en cours de lecture", r"passe la suivante",
+        r"je veux écouter", r"mets.moi de la musique", r"mets quelque chose",
+        r"joue.moi", r"balance de la musique", r"balance un son",
+        r"mets un peu de musique", r"un peu de musique", r"\bde la musique\b",
+        r"ambiance musicale", r"quelque chose à écouter",
+        r"\bdu rap\b", r"\bdu jazz\b", r"\bdu lofi\b", r"\bdu r&b\b",
+        r"\bde la pop\b", r"de l'électronique", r"\bdu chaabi\b",
+        r"\bdu raï\b", r"\bdu rai\b", r"musique de fond", r"fond musical",
+        r"\bqui chante\b",
+    ]),
+    ("volume", [
+        r"monte le son", r"baisse le son", r"coupe le son",
+        r"\bsourdine\b", r"mets en sourdine", r"\bplus fort\b", r"\bmoins fort\b",
+        r"\btrop fort\b", r"\btrop bas\b", r"mets le volume", r"règle le volume",
+    ]),
+    ("actualites", [
+        r"\bactualité\b", r"\bnouvelles\b", r"\bnews\b", r"information du jour",
+        r"quoi de neuf", r"qu'est.ce qui se passe", r"infos du jour",
+        r"dernières nouvelles", r"que se passe.t.il", r"quoi de nouveau",
+        r"actualités proximus", r"actualités télécom", r"news proximus",
+        r"nouvelles d'orange", r"news voo", r"news télécom", r"actu télécom",
+    ]),
+    ("calendrier", [
+        r"mes rendez.vous", r"mes événements", r"mes évènements",
+        r"\bcalendrier\b", r"agenda mac", r"qu'ai.je prévu",
+        r"qu'est.ce que j'ai prévu", r"j'ai quoi aujourd'hui",
+        r"programme du jour", r"qu'est.ce que j'ai ce",
+    ]),
+    ("recherche_info", [
+        r"\bbitcoin\b", r"\bethereum\b", r"\bsolana\b", r"\bdogecoin\b",
+        r"\bbnb\b", r"\bxrp\b", r"\bripple\b", r"\bcardano\b",
+        r"\bcrypto\b", r"\bcryptomonnaie\b",
+        r"bourse", r"action apple", r"action tesla", r"action nvidia",
+        r"action microsoft", r"action google", r"action amazon",
+        r"cours de", r"cours action", r"\bcotation\b", r"\bticker\b",
+        r"combien vaut l'action", r"en bourse",
+        r"\bscore\b", r"\brésultat\b", r"a gagné", r"a perdu", r"\bmatch\b",
+        r"\bpsg\b", r"\banderlecht\b", r"club brugeois", r"\bstandard\b",
+        r"champions league", r"europa league", r"coupe du monde",
+        r"ligue 1", r"série a", r"premier league", r"\bliga\b",
+        r"formule 1", r"\bf1\b", r"grand prix",
+    ]),
+    ("devises", [
+        r"taux de change", r"euro en dollar", r"\beur usd\b", r"\beur mad\b",
+        r"combien font", r"combien vaut l'euro", r"combien vaut le dollar",
+        r"convertir des euros", r"conversion devise",
+        r"combien de dirham", r"combien de dollars", r"combien de livres",
+        r"combien d'euros", r"combien ça fait en",
+    ]),
+    ("ouvrir_application", [
+        r"qu'est.ce que j'ai d'ouvert", r"quelles apps sont ouvertes",
+        r"applications ouvertes", r"apps ouvertes", r"qu'est.ce qui tourne",
+        r"ce qui est ouvert",
+    ]),
+    ("emails", [
+        r"j'ai des emails", r"emails non lus", r"\bmes mails\b",
+        r"combien d'emails", r"as.tu des emails pour moi",
+        r"vérifie mes emails", r"vérifie mes mails", r"check mes mails",
+        r"regarde mes emails", r"nouveaux emails", r"emails reçus",
+        r"lis mes emails", r"mes derniers emails", r"mes derniers mails",
+    ]),
+    ("obsidian", [
+        r"mes notes", r"dans mes notes", r"\bobsidian\b",
+        r"mon agenda du jour", r"mes tâches", r"agenda du jour",
+        r"qu'est.ce qui est prévu", r"lis.?moi la note", r"lis la note",
+        r"résume la note", r"fiche de", r"mes clients", r"mes prospects",
+        r"note rapide", r"ajoute une note",
+        r"qui est mon client", r"fiche client", r"infos sur le client",
+        r"qu'est.ce que tu sais sur", r"rappelle.moi qui est",
+    ]),
+    ("fichiers", [
+        r"qu'est.ce que tu vois", r"décris l'écran", r"décris mon écran",
+        r"regarde l'écran", r"analyse l'écran", r"décris ce que tu vois",
+        r"qu'est.ce qu'il y a à l'écran", r"que vois.tu",
+    ]),
+    ("minuteur", [
+        r"\btimerr?\b", r"\bminuteur\b", r"\bchronomètre\b",
+    ]),
+    ("alarme", [
+        r"réveille.moi", r"réveil à", r"alarme à", r"alarme pour",
+        r"programme une alarme", r"mets un réveil",
+    ]),
+]
+
+
 class LLMEngine:
     """Moteur LLM avec Groq (cloud gratuit) et Ollama (local fallback)."""
 
@@ -293,6 +414,7 @@ class LLMEngine:
         self._groq_client = None
         self._history: list[dict] = []
         self._last_response: str = ""
+        self._last_was_streamed: bool = False
 
         # Initialiser Groq si clé disponible
         if groq_api_key and _GROQ_AVAILABLE:
@@ -311,6 +433,49 @@ class LLMEngine:
     # ------------------------------------------------------------------
     # Prompt système
     # ------------------------------------------------------------------
+
+    def _build_conditional_sections(
+        self,
+        persona: dict,
+        has_notes: bool = False,
+        has_memory: bool = False,
+    ) -> str:
+        """Sections optionnelles ajoutées au prompt selon le contexte actuel."""
+        sections = []
+
+        # Section météo/saison NexaTel — seulement si business configuré
+        biz = persona.get("business", {})
+        if biz.get("name"):
+            from datetime import datetime as _dtc
+            _m = _dtc.now().month
+            _saison = {
+                5: f"SAISON FORTE déménagements — beaucoup de prospects pour {biz['name']}.",
+                6: f"SAISON FORTE déménagements — cibler les groupes Facebook immobilier.",
+                7: "SAISON ÉTÉ — étudiants et familles déménagent.",
+                8: "SAISON ÉTÉ — pic de prospection, expats et colocation.",
+                9: "RENTRÉE — familles cherchent de nouvelles offres internet.",
+                1: "JANVIER — tous les opérateurs ont augmenté. Argument prix fixe très fort.",
+            }.get(_m)
+            if _saison:
+                sections.append(f"━━━ CONTEXTE COMMERCIAL ━━━\n{_saison}")
+
+        # Section Obsidian — seulement si notes trouvées
+        if has_notes:
+            sections.append(
+                "━━━ NOTES OBSIDIAN ━━━\n"
+                "Des notes pertinentes ont été trouvées et injectées dans {notes_context}. "
+                "Utilise-les pour personnaliser ta réponse."
+            )
+
+        # Section mémoire — seulement si faits mémorisés
+        if has_memory:
+            sections.append(
+                "━━━ MÉMOIRE ACTIVE ━━━\n"
+                "Des informations des sessions précédentes sont disponibles dans {memory_context}. "
+                "Utilise-les naturellement sans les citer textuellement."
+            )
+
+        return "\n\n" + "\n\n".join(sections) if sections else ""
 
     def build_system_prompt(self, notes: list[dict], memory_context: str = "") -> str:
         if notes:
@@ -375,13 +540,20 @@ class LLMEngine:
         safe_notes = notes_context.replace("{", "{{").replace("}", "}}")
         safe_persona = persona_block.replace("{", "{{").replace("}", "}}")
 
+        # Sections conditionnelles (ajoutées seulement si pertinentes)
+        conditional = self._build_conditional_sections(
+            persona=persona,
+            has_notes=bool(notes),
+            has_memory=bool(memory_context.strip()),
+        )
+
         return _SYSTEM_PERSONA.format(
             user_name=_user_name,
             persona_block=safe_persona,
             current_datetime=current_datetime,
             memory_context=safe_memory,
             notes_context=safe_notes,
-        )
+        ) + conditional
 
     # ------------------------------------------------------------------
     # Chat streaming
@@ -545,227 +717,76 @@ class LLMEngine:
     # ------------------------------------------------------------------
 
     def _force_tool_for_query(self, text: str) -> str:
-        """Détecte les requêtes qui DOIVENT utiliser un outil (données dynamiques)."""
+        """Détecte les requêtes qui DOIVENT utiliser un outil (données dynamiques).
+        Utilise _TOOL_PATTERNS déclaratif avec re.search pour des correspondances précises.
+        """
+        import re as _re
         t = text.lower()
 
-        # Météo — données réelles open-meteo
-        if any(w in t for w in ["temps", "météo", "météorologique", "température", "pluie", "soleil",
-                                  "nuage", "vent", "il fait quel", "fait-il chaud", "fait chaud",
-                                  "fait froid", "parapluie", "risque de pluie", "prévisions météo",
-                                  "météo semaine", "météo cette semaine", "météo les prochains jours",
-                                  "prévisions de la semaine", "prévisions pour"]):
-            return "meteo"
+        # Itérer sur les patterns déclaratifs (ordre : priorité décroissante)
+        for tool_name, patterns in _TOOL_PATTERNS:
+            if any(_re.search(p, t) for p in patterns):
+                return tool_name
 
-        # Batterie & système — données dynamiques
-        if any(w in t for w in ["batterie", "battery", "charge mac", "charge du mac",
-                                  "mon mac est à", "combien de batterie", "autonomie"]):
-            return "systeme"
-        if any(w in t for w in ["cpu", "processeur", "ram", "mémoire vive", "mémoire ram",
-                                  "disque dur", "état du mac", "etat du mac", "état système",
-                                  "etat systeme", "performances mac", "mon mac chauffe"]):
-            return "systeme"
-        if any(w in t for w in ["wifi", "connexion réseau", "connecté à", "réseau internet",
-                                  "quel réseau", "internet connecté", "quel wifi"]):
-            return "systeme"
+        # --- Patterns complexes (regex composés ou exclusions) ---
 
-        # Musique — commandes naturelles (élargi)
-        if any(w in t for w in ["joue", "jouer", "met de la musique", "mets de la musique",
-                                  "lance spotify", "pause musique", "stop spotify",
-                                  "piste suivante", "track suivant", "c'est quoi cette chanson",
-                                  "qu'est-ce qui joue", "en cours de lecture", "passe la suivante",
-                                  "je veux écouter", "mets-moi de la musique", "mets quelque chose",
-                                  "joue-moi", "joue moi", "balance de la musique", "balance un son",
-                                  "mets un peu de musique", "un peu de musique", "de la musique",
-                                  "ambiance musicale", "quelque chose à écouter",
-                                  "du rap", "du jazz", "du lofi", "du r&b", "de la pop",
-                                  "de l'électronique", "du chaabi", "du raï", "du rai",
-                                  "musique de fond", "fond musical"]):
-            return "musique_spotify"
-        # "cherche X sur Spotify" ou "joue X sur Spotify"
+        # Volume avec niveau précis — "mets le son à 50", "volume à 80%"
+        if _re.search(r"(?:volume|son)\s+(?:à|au niveau de|de)\s*\d+", t) or \
+           _re.search(r"(?:règle|mets|fixe|définis?)\s+(?:le )?(?:volume|son)\s+(?:à|sur)\s*\d+", t):
+            return "volume"
+
+        # Minuteur avec durée — "dans 10 minutes", "lance un timer de 5 min"
+        if _re.search(r'\b\d+\s*(?:minute|min|heure|h|seconde|sec)\b', t) and \
+           any(w in t for w in ["dans ", "lance ", "démarre ", "mets un ", "pose un ",
+                                 "programme ", "compte à rebours"]):
+            return "minuteur"
+
+        # Alarme avec heure précise — "réveille-moi à 7h30"
+        if any(w in t for w in ["réveille-moi", "réveil à", "alarme à", "mets un réveil"]) and \
+           _re.search(r'\b\d{1,2}h\d*\b', t):
+            return "alarme"
+
+        # Devises avec montant numérique — "100 euros en dollars"
+        if _re.search(r"\d+\s*(?:euros?|€)\s+(?:en|c'est combien)", t) or \
+           _re.search(r"convertis?\s+\d+", t):
+            return "devises"
+        if any(w in t for w in ["combien vaut", "quel est le cours", "euro vaut", "dollar vaut"]) and \
+           any(w in t for w in ["dollar", "dirham", "livre", "franc", "yen", "won", "usd", "mad", "gbp"]):
+            return "devises"
+
+        # Spotify avec verbe + "spotify" — "cherche Jul sur Spotify"
         if "spotify" in t and any(w in t for w in ["cherche", "trouve", "joue", "mets", "lance"]):
             return "musique_spotify"
-        # "quelque chose de [bien/chill/...]" → musique si contexte musique présent
+
+        # Quelque chose de [chill/bien] → musique
         if "quelque chose de" in t and any(w in t for w in ["écouter", "musique", "fond", "chill", "bien"]):
             return "musique_spotify"
 
-        # Volume — commandes naturelles
-        if any(w in t for w in ["monte le son", "baisse le son", "coupe le son",
-                                  "sourdine", "mets en sourdine", "plus fort", "moins fort",
-                                  "trop fort", "trop bas", "mets le volume", "règle le volume"]):
-            return "volume"
-
-        # Luminosité
-        if any(w in t for w in ["luminosité", "luminosite", "écran plus", "écran moins",
-                                  "baisse la luminosité", "monte la luminosité",
-                                  "trop lumineux", "trop sombre", "règle la luminosité"]):
-            return "systeme"
-
-        # Screenshot
-        if any(w in t for w in ["capture d'écran", "screenshot", "fais une capture",
-                                  "prends une capture", "capture l'écran"]):
-            return "systeme"
-
-        # Actualités — flux RSS (avec détection télécom pour sources spécialisées)
-        if any(w in t for w in ["actualité", "nouvelles", "news", "information du jour",
-                                  "quoi de neuf", "qu'est-ce qui se passe", "infos du jour",
-                                  "dernières nouvelles", "que se passe-t-il", "quoi de nouveau",
-                                  "actualités proximus", "actualités télécom", "news proximus",
-                                  "nouvelles d'orange", "news voo", "news télécom",
-                                  "quoi de neuf en télécom", "actu télécom"]):
-            return "actualites"
-
-        # Calendrier macOS — rendez-vous et événements
-        if any(w in t for w in ["mes rendez-vous", "mes événements", "mes évènements",
-                                  "calendrier", "agenda mac", "qu'ai-je prévu",
-                                  "qu'est-ce que j'ai prévu", "j'ai quoi aujourd'hui",
-                                  "programme du jour", "qu'est-ce que j'ai ce"]):
-            return "calendrier"
-
-        # Crypto — prix temps réel
-        if any(w in t for w in ["bitcoin", "ethereum", "solana", "dogecoin", "bnb",
-                                  "xrp", "ripple", "cardano", "crypto", "cryptomonnaie"]):
-            return "recherche_info"
-
-        # Actions boursières — prix temps réel
-        if any(w in t for w in ["bourse", "action apple", "action tesla", "action nvidia",
-                                  "action microsoft", "action google", "action amazon",
-                                  "action meta", "action bnp", "action lvmh", "action airbus",
-                                  "cours de", "cours action", "cotation", "ticker",
-                                  "combien vaut l'action", "en bourse"]):
-            return "recherche_info"
-
-        # Sport — résultats en temps réel
-        if any(w in t for w in ["score", "résultat", "a gagné", "a perdu", "match",
-                                  "psg", "anderlecht", "club brugeois", "standard",
-                                  "champions league", "europa league", "coupe du monde",
-                                  "ligue 1", "série a", "premier league", "liga",
-                                  "formule 1", "f1", "grand prix"]):
-            return "recherche_info"
-
-        # Taux de change — données temps réel
-        if any(w in t for w in ["taux de change", "euro en dollar", "eur usd", "eur mad",
-                                  "combien font", "combien vaut l'euro", "combien vaut le dollar",
-                                  "convertir des euros", "conversion devise", "combien de dirham",
-                                  "combien de dollars", "combien de livres", "combien d'euros",
-                                  "en euros", "en dollars", "en dirhams", "combien ça fait en"]):
-            return "devises"
-
-        # Apps ouvertes — liste dynamique
-        if any(w in t for w in ["qu'est-ce que j'ai d'ouvert", "quelles apps sont ouvertes",
-                                  "applications ouvertes", "apps ouvertes", "qu'est-ce qui tourne",
-                                  "ce qui est ouvert"]):
-            return "ouvrir_application"
-
-        # Mode sombre / clair
-        if any(w in t for w in ["mode sombre", "dark mode", "thème sombre", "mode nuit mac",
-                                  "passe en sombre", "active le mode sombre"]):
-            return "systeme"
-        if any(w in t for w in ["mode clair", "light mode", "thème clair", "passe en clair",
-                                  "désactive le mode sombre"]):
-            return "systeme"
-
-        # Ne pas déranger
-        if any(w in t for w in ["ne pas déranger", "do not disturb", "coupe les notifications",
-                                  "mode focus mac", "silence les notifications", "bloque les notifs"]):
-            return "systeme"
-
-        # Bureau / show desktop
-        if any(w in t for w in ["montre le bureau", "affiche le bureau", "cache les fenêtres",
-                                  "show desktop", "bureau mac", "voir le bureau"]):
-            return "systeme"
-
-        # Radio artiste Spotify
+        # Radio artiste → musique
         if any(w in t for w in ["radio", "mix de", "mix du", "de la musique de",
                                   "genre", "style musical", "quelque chose comme"]):
             if any(w in t for w in ["spotify", "musique", "écouter", "mets", "joue"]):
                 return "musique_spotify"
 
-        # Vision écran — décrire ce qui est affiché
-        if any(w in t for w in ["qu'est-ce que tu vois", "décris l'écran", "décris mon écran",
-                                  "regarde l'écran", "analyse l'écran", "décris ce que tu vois",
-                                  "qu'est-ce qu'il y a à l'écran", "que vois-tu", "decris l ecran"]):
-            return "fichiers"
-
-        # Spotify — chanson en cours
-        if any(w in t for w in ["c'est quoi cette chanson", "qu'est-ce qui joue",
-                                  "ça joue quoi", "quelle chanson", "qui chante", "en cours de lecture",
+        # Chanson en cours → musique
+        if any(w in t for w in ["c'est quoi cette chanson", "ça joue quoi", "quelle chanson",
                                   "qu'est-ce qui est en cours"]):
             return "musique_spotify"
 
-        # Emails — consultation rapide
-        if any(w in t for w in ["j'ai des emails", "emails non lus", "mes mails",
-                                  "combien d'emails", "as-tu des emails pour moi",
-                                  "vérifie mes emails", "vérifie mes mails", "check mes mails",
-                                  "regarde mes emails", "regarde mes mails", "nouveaux emails",
-                                  "emails reçus", "lis mes emails", "lis mes mails",
-                                  "mes derniers emails", "mes derniers mails"]):
-            return "emails"
-
-        # Notes Obsidian — détection fine
-        _obsidian_kw = ["mes notes", "dans mes notes", "obsidian", "mon agenda du jour",
-                        "mes tâches", "agenda du jour", "qu'est-ce qui est prévu",
-                        "lis-moi la note", "lis la note", "lis-moi la fiche", "résume la note",
-                        "lire la fiche", "fiche de", "mes clients", "mes prospects",
-                        "thomas renard", "karim benzara", "sophie marchal", "amina tahir",
-                        "mehdi benzara", "note rapide", "ajoute une note",
-                        "qui est mon client", "fiche client", "infos sur le client",
-                        "qu'est-ce que tu sais sur", "rappelle-moi qui est"]
-        if any(w in t for w in _obsidian_kw):
-            return "obsidian"
-
-        # Presse-papier
-        if any(w in t for w in ["presse-papier", "presse papier", "clipboard",
-                                  "qu'est-ce que j'ai copié", "qu'est-ce qui est dans le presse",
-                                  "lis le presse-papier", "lis le clipboard"]):
-            return "systeme"
-
-        # Volume avec niveau précis — "mets le son à 50", "volume à 80%"
-        import re as _re2
-        if _re2.search(r"(?:volume|son)\s+(?:à|au niveau de|de)\s*\d+", t) or \
-           _re2.search(r"(?:règle|mets|fixe|définis?)\s+(?:le )?(?:volume|son)\s+(?:à|sur)\s*\d+", t):
-            return "volume"
+        # Prix opérateurs télécom
+        if any(w in t for w in ["prix de proximus", "prix d'orange", "prix voo", "prix telenet",
+                                  "combien coûte proximus", "offre proximus", "tarif proximus",
+                                  "meilleur opérateur", "quel opérateur"]):
+            return "recherche_info"
 
         # Recherche web générale — "qui est X", "cherche X", "c'est quoi X"
         _search_triggers = ["cherche ", "recherche ", "c'est quoi ", "qu'est-ce que c'est ",
                             "qui est ", "c'est qui ", "trouve-moi ", "donne-moi des infos sur ",
                             "dis-moi qui est ", "parle-moi de ", "qu'est-ce que "]
         if any(t.startswith(trigger) or f" {trigger}" in t for trigger in _search_triggers):
-            # Exclure les questions qui peuvent être répondues sans recherche
-            _no_search = ["jarvis", "toi", "tu ", "ton ", "ta ", "tu fais", "tu peux", "tu sais"]
+            _no_search = ["jarvis", " toi", " tu ", " ton ", " ta "]
             if not any(ns in t for ns in _no_search):
                 return "recherche_info"
-
-        # Comparaison prix opérateurs télécom — informations temps réel
-        if any(w in t for w in ["prix de proximus", "prix d'orange", "prix voo", "prix telenet",
-                                  "combien coûte proximus", "combien coûte orange", "combien coûte voo",
-                                  "offre proximus", "offre orange", "offre voo", "tarif proximus",
-                                  "tarif orange", "tarif voo", "meilleur opérateur", "quel opérateur"]):
-            return "recherche_info"
-
-        # Taux de change — conversion mentionnée sans les mots clés exacts
-        if _re2.search(r"\d+\s*(?:euros?|€)\s+(?:en|c'est combien)", t) or \
-           _re2.search(r"convertis?\s+\d+", t):
-            return "devises"
-
-        # Devises — euro/dollar/dirham
-        if any(w in t for w in ["combien vaut", "quel est le cours", "taux de l'euro",
-                                  "taux du dollar", "euro vaut", "dollar vaut"]) and \
-           any(w in t for w in ["dollar", "dirham", "livre", "franc", "yen", "won",
-                                  "usd", "mad", "gbp", "chf", "jpy"]):
-            return "devises"
-
-        # Minuteur — délai relatif ("dans 10 minutes", "lance un timer de 5 min")
-        if any(w in t for w in ["timer", "minuteur", "chronomètre"]) or \
-           (_re2.search(r'\b\d+\s*(?:minute|min|heure|h|seconde|sec)\b', t) and
-            any(w in t for w in ["dans ", "lance ", "démarre ", "mets un ", "pose un ",
-                                   "programme ", "dans exactement ", "compte à rebours"])):
-            return "minuteur"
-
-        # Alarme — heure précise ("réveille-moi à 7h", "programme une alarme à 8h30")
-        if any(w in t for w in ["réveille-moi", "réveil à", "alarme à", "alarme pour",
-                                   "programme une alarme", "mets un réveil"]) and \
-           _re2.search(r'\b\d{1,2}h\d*\b', t):
-            return "alarme"
 
         return ""
 
@@ -804,18 +825,19 @@ class LLMEngine:
         else:
             tool_choice = "auto"
 
-        # Tentative 1 : avec tools (retry automatique sur rate limit Groq)
+        # Streaming Groq : détecte tool call ou texte en temps réel → TTS par phrase
         try:
             _max_retries = 2
             for _attempt in range(_max_retries):
                 try:
-                    response = self._groq_client.chat.completions.create(
+                    stream = self._groq_client.chat.completions.create(
                         model=self.groq_model,
                         messages=messages,
                         tools=TOOLS,
                         tool_choice=tool_choice,
                         max_tokens=400,
                         temperature=0.6,
+                        stream=True,
                         parallel_tool_calls=False,
                     )
                     break  # succès
@@ -830,26 +852,46 @@ class LLMEngine:
                     else:
                         raise
 
-            choice = response.choices[0]
+            # Accumulation du tool call depuis le stream (aucun yield si outil détecté)
+            _tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+            self._last_response = ""
+            self._last_was_streamed = False
 
-            if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
-                tool_call = choice.message.tool_calls[0]
-                name = tool_call.function.name
+            def _stream_gen():
+                for _chunk in stream:
+                    _delta = _chunk.choices[0].delta
+                    if _delta.tool_calls:
+                        _tc["is_tool"] = True
+                        _stc = _delta.tool_calls[0]
+                        if _stc.id:
+                            _tc["id"] = _stc.id
+                        if _stc.function.name:
+                            _tc["name"] += _stc.function.name
+                        if _stc.function.arguments:
+                            _tc["args"] += _stc.function.arguments
+                    elif _delta.content:
+                        self._last_response += _delta.content
+                        yield _delta.content
+
+            if tts and hasattr(tts, "speak_streaming"):
+                tts.speak_streaming(_stream_gen())
+                self._last_was_streamed = not _tc["is_tool"]
+            else:
+                for _ in _stream_gen():
+                    pass
+
+            if _tc["is_tool"] and _tc["name"]:
                 try:
-                    args = json.loads(tool_call.function.arguments)
+                    args = json.loads(_tc["args"])
                 except Exception:
                     args = {}
-
-                logger.info(f"Tool call : {name}({args})")
-                return self._execute_and_respond(
-                    name, args, messages, choice.message, tool_call,
+                logger.info(f"Tool call (stream) : {_tc['name']}({args})")
+                return self._execute_and_respond_stream(
+                    _tc["name"], args, _tc["id"], messages,
                     persistent_memory, tts
                 )
-
             else:
-                content = choice.message.content or ""
-                self._last_response = content
-                return content, False
+                return self._last_response, False
 
         except Exception as e:
             error_str = str(e)
@@ -1129,6 +1171,53 @@ class LLMEngine:
         "meteo", "actualites", "recherche_info", "devises", "emails",
         "calendrier", "fichiers", "obsidian", "musique_spotify", "systeme",
     })
+
+    def _execute_and_respond_stream(self, name, args, tool_call_id, messages, persistent_memory, tts):
+        """Exécute un outil détecté via streaming (IDs reconstruits sans objet SDK)."""
+        from jarvis_tools import execute_tool
+        result = execute_tool(name, args, persistent_memory=persistent_memory, tts=tts)
+        self._last_response = result
+
+        if name in self._DIRECT_TOOLS:
+            return result, True
+
+        _tc_id = tool_call_id or "tc_0"
+        messages.append({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": _tc_id,
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)},
+            }],
+        })
+        messages.append({
+            "role": "tool",
+            "tool_call_id": _tc_id,
+            "content": str(result),
+        })
+
+        try:
+            for _attempt in range(2):
+                try:
+                    followup = self._groq_client.chat.completions.create(
+                        model=self.groq_model,
+                        messages=messages,
+                        max_tokens=300,
+                        temperature=0.65,
+                    )
+                    break
+                except Exception as _re:
+                    if "rate limit" in str(_re).lower() and _attempt == 0:
+                        time.sleep(2)
+                    else:
+                        raise
+            natural = followup.choices[0].message.content or result
+        except Exception as e:
+            logger.warning(f"Follow-up tool stream échoué : {e}")
+            natural = result
+
+        self._last_response = natural
+        return natural, True
 
     def _execute_and_respond(self, name, args, messages, choice_message, tool_call, persistent_memory, tts):
         """Exécute un outil et formule une réponse naturelle."""

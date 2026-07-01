@@ -338,7 +338,6 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
             if _auto_listen:
                 ui.set_status("LISTENING", "→ Répondez directement...")
                 ui.log_info("Auto-écoute (question posée)")
-                time.sleep(0.5)  # laisser afplay finir proprement
                 _auto_listen = False
             else:
                 ui.set_status("IDLE", "En attente...")
@@ -455,6 +454,9 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
             else:
                 text_for_llm = text
 
+            # Filler instantané depuis le pré-cache (réduit la perception de latence)
+            tts.speak_filler()
+
             # Essayer le tool calling en premier (compréhension naturelle)
             full_response, was_tool = llm.chat_with_tools(
                 text_for_llm, notes,
@@ -471,10 +473,11 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
             ui.set_status("SPEAKING", "JARVIS parle...")
 
             if was_tool or full_response:
-                # Réponse déjà complète (tool call résolu ou groq non-stream)
                 if full_response:
                     ui.show_response(full_response)
-                    tts.speak(full_response)
+                    # Ne pas re-parler si speak_streaming a déjà joué la réponse
+                    if not getattr(llm, "_last_was_streamed", False):
+                        tts.speak(full_response)
             else:
                 # Fallback : streaming pur (Ollama ou erreur groq)
                 response_gen = llm.chat_stream(text, notes, memory_context=memory_context)
