@@ -852,33 +852,46 @@ class LLMEngine:
                     else:
                         raise
 
-            # Accumulation du tool call depuis le stream (aucun yield si outil détecté)
+            # Streaming : texte → TTS par phrase, tool call → accumulé puis exécuté
             _tc = {"is_tool": False, "id": "", "name": "", "args": ""}
             self._last_response = ""
             self._last_was_streamed = False
 
-            def _stream_gen():
-                for _chunk in stream:
-                    _delta = _chunk.choices[0].delta
-                    if _delta.tool_calls:
-                        _tc["is_tool"] = True
-                        _stc = _delta.tool_calls[0]
-                        if _stc.id:
-                            _tc["id"] = _stc.id
-                        if _stc.function.name:
-                            _tc["name"] += _stc.function.name
-                        if _stc.function.arguments:
-                            _tc["args"] += _stc.function.arguments
-                    elif _delta.content:
-                        self._last_response += _delta.content
-                        yield _delta.content
+            _gen = self._make_stream_gen(stream, _tc)
 
-            if tts and hasattr(tts, "speak_streaming"):
-                tts.speak_streaming(_stream_gen())
-                self._last_was_streamed = not _tc["is_tool"]
-            else:
-                for _ in _stream_gen():
+            # Cas 3 : capturer exception mi-stream pour dégrader proprement
+            _stream_exc = None
+            try:
+                if tts and hasattr(tts, "speak_streaming"):
+                    tts.speak_streaming(_gen)
+                else:
+                    for _ in _gen:
+                        pass
+            except Exception as _exc:
+                _stream_exc = _exc
+                logger.error(f"Stream interrompu ({len(self._last_response)} chars) : {_exc}")
+
+            # Cas 4 : drainer le reste pour historique complet (no-op si déjà consommé)
+            try:
+                for _ in _gen:
                     pass
+            except Exception:
+                pass
+
+            # Cas 3 : exception + audio déjà joué → dégrader sans re-parler
+            if _stream_exc:
+                if self._last_response:
+                    self._last_was_streamed = True
+                    return self._last_response, False
+                raise _stream_exc  # rien prononcé → laisser le handler extérieur retry
+
+            # Cas 2 : stream hybride texte+tool (rare) → conserver le texte déjà prononcé
+            if _tc["is_tool"] and self._last_response:
+                logger.warning("Stream hybride texte+tool — contenu déjà prononcé, tool ignoré")
+                self._last_was_streamed = True
+                return self._last_response, False
+
+            self._last_was_streamed = not _tc["is_tool"]
 
             if _tc["is_tool"] and _tc["name"]:
                 try:
@@ -1171,6 +1184,30 @@ class LLMEngine:
         "meteo", "actualites", "recherche_info", "devises", "emails",
         "calendrier", "fichiers", "obsidian", "musique_spotify", "systeme",
     })
+
+    def _make_stream_gen(self, stream, tc_state: dict):
+        """
+        Crée un générateur depuis un stream Groq avec tools.
+        - Yields les tokens texte et accumule self._last_response
+        - Remplit tc_state si outil détecté (aucun yield dans ce cas)
+        Séparé de chat_with_tools pour être testable unitairement.
+        """
+        def _gen():
+            for _chunk in stream:
+                _delta = _chunk.choices[0].delta
+                if _delta.tool_calls:
+                    tc_state["is_tool"] = True
+                    _stc = _delta.tool_calls[0]
+                    if _stc.id:
+                        tc_state["id"] = _stc.id
+                    if _stc.function.name:
+                        tc_state["name"] += _stc.function.name
+                    if _stc.function.arguments:
+                        tc_state["args"] += _stc.function.arguments
+                elif _delta.content:
+                    self._last_response += _delta.content
+                    yield _delta.content
+        return _gen()
 
     def _execute_and_respond_stream(self, name, args, tool_call_id, messages, persistent_memory, tts):
         """Exécute un outil détecté via streaming (IDs reconstruits sans objet SDK)."""
