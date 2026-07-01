@@ -885,12 +885,6 @@ class LLMEngine:
                     return self._last_response, False
                 raise _stream_exc  # rien prononcé → laisser le handler extérieur retry
 
-            # Cas 2 : stream hybride texte+tool (rare) → conserver le texte déjà prononcé
-            if _tc["is_tool"] and self._last_response:
-                logger.warning("Stream hybride texte+tool — contenu déjà prononcé, tool ignoré")
-                self._last_was_streamed = True
-                return self._last_response, False
-
             self._last_was_streamed = not _tc["is_tool"]
 
             if _tc["is_tool"] and _tc["name"]:
@@ -898,10 +892,16 @@ class LLMEngine:
                     args = json.loads(_tc["args"])
                 except Exception:
                     args = {}
-                logger.info(f"Tool call (stream) : {_tc['name']}({args})")
+                # Cas 2 : texte prononcé avant le tool call → passé comme contexte au follow-up
+                # pour qu'il ne le répète pas (content + tool_calls dans le même message assistant)
+                _pre = self._last_response  # "" si stream pur tool call
+                if _pre:
+                    logger.info(f"Stream hybride texte+tool : '{_pre[:40]}' → {_tc['name']}")
+                else:
+                    logger.info(f"Tool call (stream) : {_tc['name']}({args})")
                 return self._execute_and_respond_stream(
                     _tc["name"], args, _tc["id"], messages,
-                    persistent_memory, tts
+                    persistent_memory, tts, pre_tool_text=_pre
                 )
             else:
                 return self._last_response, False
@@ -1209,8 +1209,15 @@ class LLMEngine:
                     yield _delta.content
         return _gen()
 
-    def _execute_and_respond_stream(self, name, args, tool_call_id, messages, persistent_memory, tts):
-        """Exécute un outil détecté via streaming (IDs reconstruits sans objet SDK)."""
+    def _execute_and_respond_stream(
+        self, name, args, tool_call_id, messages, persistent_memory, tts,
+        pre_tool_text: str = "",
+    ):
+        """
+        Exécute un outil détecté via streaming (IDs reconstruits sans objet SDK).
+        pre_tool_text : texte déjà prononcé avant le tool call (cas hybride) —
+          inclus dans le message assistant pour que le follow-up LLM ne le répète pas.
+        """
         from jarvis_tools import execute_tool
         result = execute_tool(name, args, persistent_memory=persistent_memory, tts=tts)
         self._last_response = result
@@ -1219,14 +1226,18 @@ class LLMEngine:
             return result, True
 
         _tc_id = tool_call_id or "tc_0"
-        messages.append({
+        # Message assistant : content uniquement si texte pré-tool-call (cas hybride)
+        _asst: dict = {
             "role": "assistant",
             "tool_calls": [{
                 "id": _tc_id,
                 "type": "function",
                 "function": {"name": name, "arguments": json.dumps(args)},
             }],
-        })
+        }
+        if pre_tool_text:
+            _asst["content"] = pre_tool_text
+        messages.append(_asst)
         messages.append({
             "role": "tool",
             "tool_call_id": _tc_id,

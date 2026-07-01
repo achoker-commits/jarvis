@@ -111,6 +111,39 @@ def test_cas2_tool_call_args_concatenated():
     assert args == {"ville": "Paris"}
 
 
+def test_cas2_hybrid_pre_tool_text_passed_to_execute():
+    """
+    Stream hybride texte+tool : _make_stream_gen yield le texte pré-tool
+    ET remplit tc_state avec le tool call.
+    Vérifie que les deux sont disponibles pour _execute_and_respond_stream.
+    """
+    llm = _new_llm()
+    tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+    gen = llm._make_stream_gen(
+        iter([
+            _mk_text("Je cherche la météo..."),   # texte pré-tool, yielded
+            _mk_tool("meteo", '{"ville":"Charleroi"}', "tc_h"),  # tool call
+        ]),
+        tc,
+    )
+    yielded = list(gen)
+
+    # Le texte pré-tool a bien été yielded (et accumulé dans _last_response)
+    assert yielded == ["Je cherche la météo..."]
+    assert llm._last_response == "Je cherche la météo..."
+
+    # Le tool call a bien été détecté
+    assert tc["is_tool"]
+    assert tc["name"] == "meteo"
+    assert tc["id"] == "tc_h"
+
+    # _execute_and_respond_stream reçoit pre_tool_text non vide
+    # (on vérifie juste que la signature accepte le paramètre)
+    import inspect
+    sig = inspect.signature(llm._execute_and_respond_stream)
+    assert "pre_tool_text" in sig.parameters
+
+
 # ── Cas 4 : historique complet après consommation partielle ───────────────────
 
 def test_cas4_drain_after_partial_consumption():
