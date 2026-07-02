@@ -231,6 +231,7 @@ Tu parles comme un assistant qui connaît vraiment la personne — pas un outil 
 • Réponds aux émotions, pas seulement au sens littéral
 
 ━━━ UTILISATION DES OUTILS (CRITIQUE) ━━━
+• MÉCANISME : utilise UNIQUEMENT le champ tool_calls de l'API pour appeler un outil. N'écris JAMAIS de syntaxe `<function=...>` dans ta réponse texte — elle ne serait pas exécutée et serait lue à voix haute.
 • Toute action Mac → outil OBLIGATOIRE. Jamais de simulation.
 • Batterie, WiFi, RAM, CPU : données dynamiques → outil, ne jamais inventer de pourcentage
 • Volume, apps, Spotify, emails, calendrier, fichiers → outil correspondant
@@ -1183,12 +1184,40 @@ class LLMEngine:
         Crée un générateur depuis un stream Groq avec tools.
         - Yields les tokens texte et accumule self._last_response
         - Remplit tc_state si outil détecté (aucun yield dans ce cas)
+        - Filtre et récupère les tool calls inline malformés
+          <function=NAME{...}</function> émis par llama-3.3 dans le content
+          au lieu du mécanisme tool_calls API
         Séparé de chat_with_tools pour être testable unitairement.
         """
+        import re as _re_mf
+
+        _MF_COMPLETE = _re_mf.compile(r'<function=(\w+)(.*?)</function>', _re_mf.DOTALL)
+        _MF_PARTIAL = "<function="
+
+        def _parse_inline(m) -> None:
+            _fn_name = m.group(1)
+            _fn_body = m.group(2).strip()
+            try:
+                json.loads(_fn_body)
+                _fn_json = _fn_body
+            except (ValueError, json.JSONDecodeError):
+                _jm = _re_mf.search(r'\{.*\}', _fn_body, _re_mf.DOTALL)
+                _fn_json = _jm.group(0) if _jm else "{}"
+            logger.warning(f"[JARVIS] Tool call inline récupéré : {_fn_name}({_fn_json[:60]})")
+            tc_state["is_tool"] = True
+            tc_state["id"] = tc_state.get("id") or "tc_inline_0"
+            tc_state["name"] = _fn_name
+            tc_state["args"] = _fn_json
+
         def _gen():
+            _buf = ""
             for _chunk in stream:
                 _delta = _chunk.choices[0].delta
                 if _delta.tool_calls:
+                    # Proper structured API tool call — flush buffer silently
+                    if _buf:
+                        self._last_response += _buf
+                        _buf = ""
                     tc_state["is_tool"] = True
                     _stc = _delta.tool_calls[0]
                     if _stc.id:
@@ -1198,8 +1227,38 @@ class LLMEngine:
                     if _stc.function.arguments:
                         tc_state["args"] += _stc.function.arguments
                 elif _delta.content:
-                    self._last_response += _delta.content
-                    yield _delta.content
+                    _buf += _delta.content
+                    # Vérifier si un tool call inline complet est présent
+                    _m = _MF_COMPLETE.search(_buf)
+                    if _m:
+                        _pre = _buf[:_m.start()]
+                        if _pre:
+                            self._last_response += _pre
+                            yield _pre
+                        _parse_inline(_m)
+                        for _ in stream:  # drain le reste silencieusement
+                            pass
+                        return
+                    # Retenir la fin du buffer si elle commence un pattern partiel
+                    _ppos = _buf.rfind(_MF_PARTIAL)
+                    _safe = _buf[:_ppos] if _ppos != -1 else _buf
+                    if _safe:
+                        self._last_response += _safe
+                        yield _safe
+                        _buf = _buf[len(_safe):]
+            # Fin de stream : vider le buffer restant
+            if _buf:
+                _m = _MF_COMPLETE.search(_buf)
+                if _m:
+                    _pre = _buf[:_m.start()]
+                    if _pre:
+                        self._last_response += _pre
+                        yield _pre
+                    _parse_inline(_m)
+                else:
+                    self._last_response += _buf
+                    yield _buf
+
         return _gen()
 
     def _execute_and_respond_stream(

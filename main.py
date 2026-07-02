@@ -336,6 +336,7 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
                 overlay.set_idle()
 
             if _auto_listen:
+                time.sleep(0.1)  # laisse CoreAudio libérer le device TTS avant le micro
                 ui.set_status("LISTENING", "→ Répondez directement...")
                 ui.log_info("Auto-écoute (question posée)")
                 _auto_listen = False

@@ -194,3 +194,82 @@ def test_cas4_last_response_equals_concatenation():
     yielded = list(gen)
     assert "".join(yielded) == "".join(texts)
     assert llm._last_response == "".join(texts)
+
+
+# ── Cas 5 : tool call inline malformé (llama-3.3 bug) ────────────────────────
+
+def test_cas5_malformed_inline_tool_call_filtered():
+    """
+    llama-3.3 émet <function=systeme{"action":"batterie"}</function> dans le
+    content au lieu d'utiliser tool_calls → le fragment ne doit PAS être yielded
+    vers le TTS, et tc_state doit être rempli correctement.
+    """
+    import json
+    llm = _new_llm()
+    tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+    gen = llm._make_stream_gen(
+        iter([_mk_text('<function=systeme{"action": "batterie"}</function>')]),
+        tc,
+    )
+    yielded = list(gen)
+    all_text = "".join(yielded)
+    assert "<function=" not in all_text, f"Fragment malformé transmis au TTS : {all_text!r}"
+    assert tc["is_tool"]
+    assert tc["name"] == "systeme"
+    args = json.loads(tc["args"])
+    assert args.get("action") == "batterie"
+
+
+def test_cas5_malformed_with_pre_text():
+    """Texte légitme avant le tool call inline → texte yielded, outil détecté."""
+    import json
+    llm = _new_llm()
+    tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+    gen = llm._make_stream_gen(
+        iter([
+            _mk_text("Je vérifie la batterie..."),
+            _mk_text('<function=systeme{"action": "batterie"}</function>'),
+        ]),
+        tc,
+    )
+    yielded = list(gen)
+    all_text = "".join(yielded)
+    assert "<function=" not in all_text
+    assert "Je vérifie la batterie..." in all_text
+    assert tc["is_tool"]
+    assert tc["name"] == "systeme"
+    args = json.loads(tc["args"])
+    assert args.get("action") == "batterie"
+
+
+def test_cas5_malformed_split_across_chunks():
+    """Tool call malformé arrivant en plusieurs chunks — tous filtrés."""
+    import json
+    llm = _new_llm()
+    tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+    gen = llm._make_stream_gen(
+        iter([
+            _mk_text("<function="),
+            _mk_text('meteo{"ville":'),
+            _mk_text(' "Charleroi"}</function>'),
+        ]),
+        tc,
+    )
+    yielded = list(gen)
+    all_text = "".join(yielded)
+    assert "<function=" not in all_text
+    assert tc["is_tool"]
+    assert tc["name"] == "meteo"
+    args = json.loads(tc["args"])
+    assert args.get("ville") == "Charleroi"
+
+
+def test_cas5_no_false_positive_function_word():
+    """Le mot 'function' normal dans le texte ne doit PAS déclencher le filtre."""
+    llm = _new_llm()
+    tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+    text = "La fonction principale de cet outil est simple."
+    gen = llm._make_stream_gen(iter([_mk_text(text)]), tc)
+    yielded = list(gen)
+    assert "".join(yielded) == text
+    assert not tc["is_tool"]

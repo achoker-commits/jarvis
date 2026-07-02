@@ -269,6 +269,7 @@ def play_audio_bytes(audio_bytes: bytes, fmt: str = "mp3") -> None:
         data, samplerate = sf.read(buf, dtype="float32")
         sd.play(data, samplerate)
         sd.wait()
+        sd.stop()  # libère le device CoreAudio avant toute capture micro
         return
     except Exception:
         pass  # soundfile ne supporte pas ce format → fallback subprocess

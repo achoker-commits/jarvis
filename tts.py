@@ -486,6 +486,8 @@ class TTSEngine:
     def _clean_for_tts(text: str) -> str:
         """Supprime le markdown et les artefacts visuels pour une lecture vocale naturelle."""
         import re as _re
+        # Tool calls inline malformés (2e ligne de défense après _make_stream_gen)
+        text = _re.sub(r'<function=\w+.*?</function>', '', text, flags=_re.DOTALL)
         # Blocs de code
         text = _re.sub(r'```[^`]*```', '', text, flags=_re.DOTALL)
         text = _re.sub(r'`([^`]+)`', r'\1', text)
