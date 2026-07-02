@@ -755,8 +755,18 @@ def execute_tool(name: str, args: dict, persistent_memory=None, tts=None) -> str
         elif name == "memoriser":
             info = args.get("information", "")
             if persistent_memory and info:
-                persistent_memory.save_fact(info)
-            return f"Mémorisé : {info}."
+                import re as _re_mem
+                # Rejeter les faits transitoires : états techniques, problèmes en cours, tests
+                _TRANSIENT = _re_mem.compile(
+                    r"(?:problème|bug|erreur|grésil|souci|en cours|transitoire"
+                    r"|audio|micro|son|voix|feedback|bruit|test|essai"
+                    r"|ne marche pas|ne fonctionne pas|ça ne|ça n'|régler"
+                    r"|corriger|résoudre|à corriger|à régler)",
+                    _re_mem.IGNORECASE,
+                )
+                if not _TRANSIENT.search(info):
+                    persistent_memory.save_fact(info)
+            return ""  # silencieux — JARVIS ne dit jamais "Mémorisé : ..."
 
         elif name == "actualites":
             import requests, xml.etree.ElementTree as ET

@@ -255,24 +255,39 @@ def apply_noise_reduction(audio_bytes: bytes) -> bytes:
 # Lecture audio
 # ---------------------------------------------------------------------------
 
+_OUTPUT_SAMPLERATE = 44100  # taux de sortie standard macOS (évite err='-50' CoreAudio)
+
+
 def play_audio_bytes(audio_bytes: bytes, fmt: str = "mp3") -> None:
     """
     Joue des bytes audio (MP3 ou WAV).
-    Utilise sounddevice pour WAV, afplay/system pour MP3.
+    MP3 → toujours afplay/subprocess (libsndfile 1.1+ décode le MP3 mais
+    sd.play(data, 24000) déclenche PaMacCore err='-50' car CoreAudio refuse
+    24kHz sur le device de sortie macOS par défaut).
+    WAV/PCM → sounddevice en mémoire (pas de tempfile).
     """
     if not audio_bytes:
         return
 
-    # Lecture en mémoire via soundfile/sounddevice (pas de tempfile ni subprocess)
-    try:
-        buf = io.BytesIO(audio_bytes)
-        data, samplerate = sf.read(buf, dtype="float32")
-        sd.play(data, samplerate)
-        sd.wait()
-        sd.stop()  # libère le device CoreAudio avant toute capture micro
-        return
-    except Exception:
-        pass  # soundfile ne supporte pas ce format → fallback subprocess
+    # WAV/PCM uniquement : sounddevice en mémoire avec samplerate explicite
+    if fmt not in ("mp3", "mpeg"):
+        try:
+            buf = io.BytesIO(audio_bytes)
+            data, samplerate = sf.read(buf, dtype="float32")
+            # Rééchantillonner si nécessaire pour éviter err='-50' CoreAudio
+            if samplerate != _OUTPUT_SAMPLERATE and len(data) > 0:
+                import numpy as _np
+                ratio = _OUTPUT_SAMPLERATE / samplerate
+                new_len = int(len(data) * ratio)
+                indices = _np.linspace(0, len(data) - 1, new_len)
+                data = _np.interp(indices, _np.arange(len(data)), data if data.ndim == 1
+                                  else data[:, 0]).astype(_np.float32)
+            sd.play(data, _OUTPUT_SAMPLERATE)
+            sd.wait()
+            sd.stop()
+            return
+        except Exception:
+            pass  # fallback subprocess
 
     # Fichier temporaire + outil système
     tmp_path = None
@@ -344,11 +359,12 @@ def list_microphones() -> list:
 
 
 def play_beep(frequency: int = 880, duration: float = 0.15) -> None:
-    """Joue un bip de confirmation (tone sinusoïdal) via sounddevice."""
+    """Joue un bip de confirmation (tone sinusoïdal) via sounddevice.
+    Utilise 44100 Hz (standard macOS) — 16000 Hz (taux STT) cause err='-50' CoreAudio."""
     try:
-        t = np.linspace(0, duration, int(SAMPLE_RATE * duration), endpoint=False)
+        t = np.linspace(0, duration, int(_OUTPUT_SAMPLERATE * duration), endpoint=False)
         wave_data = (0.3 * np.sin(2 * np.pi * frequency * t)).astype(np.float32)
-        sd.play(wave_data, SAMPLE_RATE)
+        sd.play(wave_data, _OUTPUT_SAMPLERATE)
         sd.wait()
     except Exception:
         print("\a", end="", flush=True)
