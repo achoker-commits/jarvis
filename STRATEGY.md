@@ -4,6 +4,76 @@ Revue initiale : Claude Fable. Implémentation : sessions successives.
 
 ---
 
+## GEL DU PROJET — 02/07/2026
+
+### État fonctionnel à la mise en pause
+
+| Composant | État | Notes |
+|---|---|---|
+| Wake word (Whisper KW) | ✅ Fonctionnel | Détection "Jarvis" + aliases phonétiques + Levenshtein |
+| STT (faster-whisper medium) | ✅ Fonctionnel | VAD webrtcvad, débruitage noisereduce |
+| TTS (Edge TTS fr-FR-HenriNeural) | ✅ Fonctionnel | Streaming par phrase, cache LRU 500 MB |
+| Météo (Open-Meteo) | ✅ Fonctionnel | Outil `meteo`, timeout 8s |
+| Batterie / système (pmset) | ✅ Fonctionnel | Outil `systeme` |
+| Bourse (yfinance) | ✅ Fonctionnel | ThreadPoolExecutor timeout 8s |
+| Mémoire persistante JSON | ✅ Fonctionnel | `~/.jarvis_memory.json`, auto-extraction |
+| Tools streaming (Groq) | ✅ Fonctionnel | 72 tests passent, 3 formats inline détectés |
+| Filtre inline `<function=…>` | ✅ Fonctionnel | Regex + end-of-stream recovery |
+| Pipeline audio post-freeze | ✅ Fonctionnel | sleep(0.2) entre wake word et micro, 1 seul thread clavier |
+| Logs cycle de vie audio | ✅ Ajoutés | `[WAKE]`, `[REC]`, `[CYCLE]` à chaque transition |
+
+### Bugs résiduels connus
+
+| Bug | Symptôme | Cause racine identifiée |
+|---|---|---|
+| Pseudo-code `<function=…>` dans les réponses | llama-3.3 émet du texte brut imitant un tool call au lieu d'utiliser le mécanisme natif — le filtre fonctionne sur les formats connus mais llama peut en inventer de nouveaux | **llama-3.3-70b-versatile** génère ce format de façon non déterministe sur les questions philosophiques ou conversationnelles longues |
+| Freeze 50-85 s sur questions conversationnelles | Le LLM prend un temps anormalement long à répondre aux questions ouvertes (philosophie, opinion) — aucun outil en cause | **llama-3.3** max_tokens atteint + retry Groq — architectural, pas corrigeable côté JARVIS |
+| Filtre TTS inopérant sur certains chemins | Sur le chemin `_execute_and_respond_stream` après un tool call, du texte `<function=…>` résiduel peut atteindre le TTS si llama chaîne un 2e tool call de façon non standard | Chemin de code secondaire — nécessite refactoring LLM provider |
+
+### Diagnostic établi
+
+**Ces 3 bugs ont une cause commune : `llama-3.3-70b-versatile` (Groq).** Le modèle est excellent pour le small talk et les outils simples, mais génère des comportements non déterministes sur les requêtes complexes ou longues. L'architecture JARVIS est saine — les bugs disparaîtront en changeant de cerveau.
+
+---
+
+### PROCHAINE ÉTAPE À LA REPRISE : Migration vers Claude (Anthropic)
+
+**Ne PAS continuer à débugger llama.** Le temps de debug dépasse le coût d'une migration.
+
+#### Plan de migration
+
+1. **Créer `llm_provider.py`** — abstraction `LLMProvider` (interface commune `chat_stream`, `chat_with_tools`, `chat_sync`)
+2. **Implémenter `ClaudeProvider`** — `anthropic` SDK, `claude-haiku-4-5` pour la vitesse, `claude-sonnet-4-6` pour les tools complexes
+3. **Garder `GroqProvider`** pour le small talk (latence < 500 ms, coût zéro)
+4. **Routing hybride** dans `llm.py` :
+   - Question courte / small talk → Groq llama (rapide, gratuit)
+   - Tool call → Claude Haiku (fiable, format strict)
+   - Requête NexaTel / longue → Claude Haiku (cohérence)
+5. **Supprimer tout le code de détection `<function=…>`** — Claude utilise le tool use natif JSON, jamais de pseudo-code inline
+
+#### Coût estimé
+- Claude Haiku : ~$0.25/M tokens input, ~$1.25/M output
+- Usage JARVIS estimé : 200-300 échanges/mois × ~500 tokens moyenne = **3-4$/mois**
+- Groq (small talk) : gratuit
+
+#### Fichiers à modifier
+| Fichier | Changement |
+|---|---|
+| `llm_provider.py` | Créer (nouveau) |
+| `llm.py` | Adapter `LLMEngine` pour déléguer à `GroqProvider` ou `ClaudeProvider` |
+| `config.py` | Ajouter `ANTHROPIC_API_KEY`, `CLAUDE_MODEL` |
+| `llm.py` | Supprimer `_MF_COMPLETE`, `_MF_PARTIAL`, `_parse_inline`, filtres inline |
+| `tts.py` | Simplifier `_clean_for_tts` (filtre inline inutile avec Claude) |
+| `tests/test_streaming.py` | Adapter cas 5 et 6 (plus pertinents) |
+
+#### Tests de validation post-migration
+- `python3 -m pytest tests/ -q` → 72+ tests verts
+- Question philosophique longue → pas de freeze
+- Tool call météo → JSON propre, pas de `<function=…>`
+- Small talk "comment tu vas" → Groq, < 600ms
+
+---
+
 ## Points réalisés
 
 | # | Point | Fichier(s) | Statut |

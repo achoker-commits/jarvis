@@ -1,6 +1,8 @@
 # JARVIS — Assistant IA Personnel
 
-**Just A Rather Very Intelligent System** — Assistant vocal local propulsé par Claude (Anthropic), Whisper (OpenAI) et ElevenLabs.
+> **Statut : en pause (juillet 2026)** — voir `STRATEGY.md` section **GEL DU PROJET — 02/07/2026** pour l'état fonctionnel, les bugs résiduels et le plan de reprise (migration Claude Haiku).
+
+**Just A Rather Very Intelligent System** — Assistant vocal local propulsé par Groq (llama-3.3-70b), Whisper (faster-whisper) et Edge TTS (fr-FR-HenriNeural).
 
 ---
 
