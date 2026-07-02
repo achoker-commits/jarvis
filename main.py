@@ -343,7 +343,10 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
             else:
                 ui.set_status("IDLE", "En attente...")
                 ui.print_wake_prompt(strategy=wake.get_strategy())
+                logger.debug(f"[CYCLE] En veille (thread={threading.current_thread().name})")
                 wake.listen_for_wake_word()
+                logger.info(f"[CYCLE] Wake word détecté → micro (thread={threading.current_thread().name})")
+                time.sleep(0.2)  # Laisse CoreAudio fermer le stream wake word avant d'ouvrir le micro
 
             if consecutive_errors > 0:
                 consecutive_errors = 0
@@ -360,6 +363,7 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
                     silence_duration=config.SILENCE_THRESHOLD,
                 )
                 audio_bytes = apply_noise_reduction(audio_bytes)
+                logger.debug(f"[CYCLE] Audio {len(audio_bytes)//1000}KB → transcription")
             except Exception as e:
                 logger.error(f"Erreur enregistrement : {e}")
                 ui.log_error(f"Microphone indisponible : {e}")
@@ -396,6 +400,7 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
 
             ui.show_user_input(text)
             logger.info(f"Transcription : '{text}'")
+            logger.debug("[CYCLE] Transcription OK → LLM")
 
             # Bip de confirmation "j'ai entendu" — réduit la sensation de silence
             try:
@@ -477,6 +482,7 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
             tts.speak_filler()
 
             # Essayer le tool calling en premier (compréhension naturelle)
+            logger.debug("[CYCLE] LLM start")
             full_response, was_tool = llm.chat_with_tools(
                 text_for_llm, notes,
                 memory_context=memory_context,
@@ -491,6 +497,7 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
                 overlay.set_speaking()
             ui.set_status("SPEAKING", "JARVIS parle...")
 
+            logger.debug(f"[CYCLE] LLM terminé (was_tool={was_tool}) → TTS")
             wake.mute()  # désactive le wake word pendant le TTS
             try:
                 if was_tool or full_response:
@@ -505,6 +512,7 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
                     tts.speak_streaming(response_gen)
                     full_response = llm.get_last_response()
             finally:
+                logger.debug("[CYCLE] TTS terminé → unmute → veille")
                 wake.unmute()  # réactive + démarre cooldown 3 s (couvre l'écho TTS)
 
             llm.add_to_history("user", text)

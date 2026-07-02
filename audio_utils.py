@@ -15,6 +15,7 @@ import queue
 import tempfile
 import os
 import sys
+import threading
 from typing import Optional
 
 import numpy as np
@@ -128,6 +129,7 @@ def record_audio_vad(
     if not GUI_MODE:
         print("\n  Enregistrement...\n")
 
+    logger.debug(f"[REC] Ouverture sd.InputStream samplerate={sample_rate} (thread={threading.current_thread().name})")
     try:
         with sd.InputStream(
             samplerate=sample_rate,
@@ -137,6 +139,7 @@ def record_audio_vad(
             callback=_callback,
             latency="low",
         ):
+            logger.debug("[REC] sd.InputStream ouvert")
             while frame_count < max_frames:
                 try:
                     frame = audio_queue.get(timeout=1.0)
@@ -187,6 +190,7 @@ def record_audio_vad(
     except Exception as e:
         logger.error(f"Erreur enregistrement : {e}")
 
+    logger.debug("[REC] sd.InputStream fermé")
     if not GUI_MODE:
         print()
 

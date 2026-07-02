@@ -9,6 +9,7 @@ import struct
 import sys
 import time
 import queue
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -89,6 +90,11 @@ class WakeWordDetector:
         # Cooldown inter-appels + garde TTS
         self._last_trigger_time: float = 0.0  # persiste entre appels successifs
         self._muted: bool = False              # True pendant que TTS parle
+
+        # Thread clavier unique — évite l'accumulation de threads bloqués sur input()
+        # entre les appels successifs à listen_for_wake_word()
+        self._kb_triggered: threading.Event = threading.Event()
+        self._kb_thread_alive: bool = False
 
         self.strategy = self._detect_strategy()
         logger.info(f"Stratégie wake word : {self.strategy}")
@@ -291,26 +297,30 @@ class WakeWordDetector:
         def _cb(indata, frames, time_info, status):
             audio_q.put(indata[:, 0].tobytes())
 
-        import threading
-        _triggered = threading.Event()
-
-        def _kb_thread():
-            try:
-                input()
-                _triggered.set()
-            except Exception:
-                pass
-
-        threading.Thread(target=_kb_thread, daemon=True).start()
+        if not self._kb_thread_alive:
+            self._kb_thread_alive = True
+            def _kb_loop():
+                while True:
+                    try:
+                        input()
+                        self._kb_triggered.set()
+                    except EOFError:
+                        time.sleep(0.5)
+                    except Exception:
+                        break
+            threading.Thread(target=_kb_loop, daemon=True, name="WW-KbFallback").start()
 
         if not GUI_MODE:
             print(f"\n  \033[36m●\033[0m  Dites  \033[1;36mJARVIS\033[0m  (ou appuyez sur Entrée)\n")
 
         try:
+            time.sleep(0.1)  # Laisse CoreAudio fermer le stream précédent (async close)
+            logger.debug(f"[WAKE] Ouverture sd.InputStream (thread={threading.current_thread().name})")
             with sd.InputStream(
                 samplerate=16000, channels=1, dtype="int16",
                 blocksize=CHUNK, callback=_cb, latency="low",
             ):
+                logger.debug("[WAKE] sd.InputStream ouvert")
                 ring         = _deque(maxlen=WIN_CHUNKS)  # buffer circulaire
                 step_counter = 0
                 # startup_grace : ignorer les WIN_CHUNKS premières frames (1.5 s)
@@ -318,7 +328,9 @@ class WakeWordDetector:
                 startup_grace = WIN_CHUNKS
 
                 while True:
-                    if _triggered.is_set():
+                    if self._kb_triggered.is_set():
+                        self._kb_triggered.clear()
+                        logger.debug("[WAKE] sd.InputStream fermé (clavier)")
                         logger.info("Activation manuelle clavier")
                         return True
 
@@ -380,6 +392,7 @@ class WakeWordDetector:
                             if not GUI_MODE:
                                 print(f"\n  \033[32m✓ '{text}' → JARVIS activé\033[0m")
                             logger.info(f"Wake word détecté : '{text}'")
+                            logger.debug("[WAKE] sd.InputStream fermé (wake word détecté)")
                             # Cooldown persistant + vider ring + drainer queue
                             self._last_trigger_time = time.time()
                             ring.clear()
