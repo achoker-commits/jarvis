@@ -3,6 +3,7 @@ commands.py — Commandes locales JARVIS (ultra-rapides, sans appel API)
 Seules les opérations vraiment locales restent ici.
 Tout le reste (météo, apps, web, musique, volume...) est géré par le tool calling LLM.
 """
+from __future__ import annotations
 
 import logging
 import re

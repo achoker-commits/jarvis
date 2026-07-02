@@ -3,6 +3,7 @@ tts.py — Moteur Text-to-Speech JARVIS
 Chaîne de priorité : ElevenLabs → Edge TTS (gratuit, neural) → OpenAI TTS → pyttsx3
 Edge TTS = voix Microsoft Edge, qualité neurale, 100% gratuit.
 """
+from __future__ import annotations
 
 import asyncio
 import hashlib

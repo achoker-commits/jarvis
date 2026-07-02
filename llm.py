@@ -2,6 +2,7 @@
 llm.py — Moteur LLM JARVIS
 Priorité : Groq API (gratuit, ultra-rapide, Llama 3.1 70B) → Ollama local (offline fallback)
 """
+from __future__ import annotations
 
 import json
 import logging

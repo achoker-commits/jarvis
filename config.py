@@ -2,6 +2,7 @@
 config.py — Configuration et variables d'environnement JARVIS
 Charge le fichier .env et valide les clés requises.
 """
+from __future__ import annotations
 
 import os
 from pathlib import Path
