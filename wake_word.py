@@ -200,22 +200,80 @@ class WakeWordDetector:
             else:
                 self.strategy = self.STRATEGY_KEYBOARD
 
+    # ------------------------------------------------------------------
+    # Helpers matching flou
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _lev_ratio(a: str, b: str) -> float:
+        """Ratio de similarité Levenshtein normalisé [0, 1] — 1 = identique."""
+        if not a and not b:
+            return 1.0
+        if not a or not b:
+            return 0.0
+        la, lb = len(a), len(b)
+        row = list(range(lb + 1))
+        for i, ca in enumerate(a, 1):
+            new_row = [i]
+            for j, cb in enumerate(b, 1):
+                new_row.append(
+                    row[j - 1] if ca == cb
+                    else 1 + min(row[j], new_row[-1], row[j - 1])
+                )
+            row = new_row
+        return 1.0 - row[lb] / max(la, lb)
+
+    def _is_keyword(self, text: str) -> bool:
+        """
+        True si 'text' contient une variante du mot-clé.
+        Combine alias exacts + Levenshtein normalisé (seuil 0.75).
+        """
+        _ALIASES = {
+            # Transcriptions correctes ou quasi-correctes
+            "jarvis", "jarvi", "jarv", "jarves", "jarwis", "jarvais",
+            "jarvice", "jarve", "jarvees",
+            # Confusions phonétiques courantes (Whisper tiny FR)
+            "gervais", "gervals", "harvey", "garvis", "garvey",
+            "djarvis", "tchervis", "java",
+            # Fragments / homophones
+            "jarv",
+        }
+        words = text.lower().split()
+        for word in words:
+            clean = word.strip(".,!?;:'\"")
+            if not clean:
+                continue
+            if clean in _ALIASES:
+                return True
+            if self._lev_ratio(clean, self.keyword) >= 0.75:
+                return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Stratégie : Whisper KW — dit juste "Jarvis", sans "Hey"
+    # ------------------------------------------------------------------
+
     def _listen_whisper_kw(self) -> bool:
         """
-        Écoute permanente via VAD RMS + Whisper tiny.
-        Déclenche quand 'jarvis' (ou 'jarvis' dans une phrase) est transcrit.
-        Temps de réaction : ~0.4-0.8s après la fin du mot.
+        Écoute permanente via fenêtre glissante + Whisper tiny.
+        Buffer circulaire de 1.5 s analysé toutes les 0.5 s — garantit que
+        "Jarvis" tombe toujours entièrement dans au moins une fenêtre.
+        Matching flou : alias + Levenshtein normalisé ≥ 0.75.
         """
         if not self._kw_model:
             return self._listen_keyboard()
 
         import os, tempfile
+        from collections import deque as _deque
         from audio_utils import build_wav_bytes, get_rms, GUI_MODE
 
-        CHUNK         = 480          # 30ms à 16kHz
-        RMS_THRESHOLD = 500          # seuil RMS pour détecter la parole
-        SILENCE_LIMIT = 12           # ~360ms de silence → fin d'énoncé (plus réactif)
-        KEYWORD       = self.keyword.lower()   # "jarvis"
+        CHUNK        = 480    # 30 ms @ 16 kHz
+        WIN_CHUNKS   = 50     # fenêtre 1.5 s (50 × 30 ms)
+        STEP_CHUNKS  = 17     # analyse toutes les ~0.5 s
+        RMS_THRESH   = 400    # seuil énergie (légèrement abaissé vs 500)
+        ENERGY_RATIO = 0.15   # ≥ 15 % des frames doivent avoir de l'énergie
+        COOLDOWN     = 3.0    # secondes entre deux détections
+
         audio_q: queue.Queue = queue.Queue()
 
         def _cb(indata, frames, time_info, status):
@@ -238,16 +296,12 @@ class WakeWordDetector:
 
         try:
             with sd.InputStream(
-                samplerate=16000,
-                channels=1,
-                dtype="int16",
-                blocksize=CHUNK,
-                callback=_cb,
-                latency="low",
+                samplerate=16000, channels=1, dtype="int16",
+                blocksize=CHUNK, callback=_cb, latency="low",
             ):
-                buffer = []
-                silent_frames = 0
-                speaking = False
+                ring         = _deque(maxlen=WIN_CHUNKS)  # buffer circulaire
+                step_counter = 0
+                last_trigger = 0.0
 
                 while True:
                     if _triggered.is_set():
@@ -260,61 +314,81 @@ class WakeWordDetector:
                     except queue.Empty:
                         continue
 
-                    rms = get_rms(frame)
+                    ring.append(frame)
+                    step_counter += 1
 
-                    if rms > RMS_THRESHOLD:
-                        speaking = True
-                        silent_frames = 0
-                        buffer.append(frame)
-                    elif speaking:
-                        buffer.append(frame)
-                        silent_frames += 1
+                    if step_counter < STEP_CHUNKS:
+                        continue
+                    step_counter = 0
 
-                        if silent_frames >= SILENCE_LIMIT:
-                            # Fin d'énoncé — transcrire
-                            raw = b"".join(buffer)
-                            if len(raw) > 2000:   # min ~62ms d'audio
-                                tmp_path = None
-                                try:
-                                    wav = build_wav_bytes(raw)
-                                    with tempfile.NamedTemporaryFile(
-                                        suffix=".wav", delete=False, prefix="jarvis_kw_"
-                                    ) as f:
-                                        f.write(wav)
-                                        tmp_path = f.name
+                    # Pas assez de données ou cooldown actif
+                    if len(ring) < WIN_CHUNKS // 3:
+                        continue
+                    now = time.time()
+                    if now - last_trigger < COOLDOWN:
+                        continue
 
-                                    segs, _ = self._kw_model.transcribe(
-                                        tmp_path,
-                                        language="fr",
-                                        beam_size=1,
-                                        temperature=0.0,
-                                        no_speech_threshold=0.7,
-                                    )
-                                    text = " ".join(s.text for s in segs).lower().strip()
+                    # Vérifier qu'il y a de la parole dans la fenêtre
+                    energy_ct = sum(1 for f in ring if get_rms(f) > RMS_THRESH)
+                    if energy_ct < len(ring) * ENERGY_RATIO:
+                        continue  # silence → pas d'analyse
 
-                                    if text:
-                                        logger.debug(f"KW transcription : '{text}'")
-                                    # Variantes phonétiques de "jarvis" (erreurs courantes Whisper)
-                                    _VARIANTS = {KEYWORD, "harvey", "garvis", "jarvi", "jarv",
-                                                 "jarvees", "djarvis", "garvey", "jarves", "jarwis"}
-                                    if any(v in text for v in _VARIANTS):
-                                        if not GUI_MODE:
-                                            print(f"\n  \033[32m✓ '{text}' → JARVIS activé\033[0m")
-                                        logger.info(f"Wake word détecté via Whisper KW : '{text}'")
-                                        self._play_activation_sound()
-                                        return True
-                                except Exception as e:
-                                    logger.debug(f"KW transcription err : {e}")
-                                finally:
-                                    if tmp_path:
-                                        try:
-                                            os.unlink(tmp_path)
-                                        except Exception:
-                                            pass
+                    # Transcrire la fenêtre glissante
+                    raw = b"".join(ring)
+                    if len(raw) < 3000:
+                        continue
 
-                            buffer = []
-                            speaking = False
-                            silent_frames = 0
+                    tmp_path = None
+                    try:
+                        wav = build_wav_bytes(raw)
+                        with tempfile.NamedTemporaryFile(
+                            suffix=".wav", delete=False, prefix="jarvis_kw_"
+                        ) as f:
+                            f.write(wav)
+                            tmp_path = f.name
+
+                        segs, _ = self._kw_model.transcribe(
+                            tmp_path,
+                            language="fr",
+                            beam_size=1,
+                            temperature=0.0,
+                            no_speech_threshold=0.6,
+                        )
+                        text = " ".join(s.text for s in segs).lower().strip()
+
+                        # Toujours logguer ce que tiny entend — clé pour la calibration
+                        if text:
+                            logger.info(f"[KW] tiny a entendu : '{text}'")
+
+                        if self._is_keyword(text):
+                            if not GUI_MODE:
+                                print(f"\n  \033[32m✓ '{text}' → JARVIS activé\033[0m")
+                            logger.info(f"Wake word détecté : '{text}'")
+                            last_trigger = now
+                            self._play_activation_sound()
+                            # Drainer la queue (repartir proprement)
+                            try:
+                                while True:
+                                    audio_q.get_nowait()
+                            except queue.Empty:
+                                pass
+                            return True
+
+                    except Exception as e:
+                        logger.debug(f"KW transcription err : {e}")
+                    finally:
+                        if tmp_path:
+                            try:
+                                os.unlink(tmp_path)
+                            except Exception:
+                                pass
+
+                    # Rattraper les frames accumulées pendant la transcription
+                    try:
+                        while True:
+                            ring.append(audio_q.get_nowait())
+                    except queue.Empty:
+                        pass
 
         except Exception as e:
             logger.error(f"Erreur Whisper KW : {e}")
