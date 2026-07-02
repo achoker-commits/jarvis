@@ -473,17 +473,21 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
                 overlay.set_speaking()
             ui.set_status("SPEAKING", "JARVIS parle...")
 
-            if was_tool or full_response:
-                if full_response:
-                    ui.show_response(full_response)
-                    # Ne pas re-parler si speak_streaming a déjà joué la réponse
-                    if not getattr(llm, "_last_was_streamed", False):
-                        tts.speak(full_response)
-            else:
-                # Fallback : streaming pur (Ollama ou erreur groq)
-                response_gen = llm.chat_stream(text, notes, memory_context=memory_context)
-                tts.speak_streaming(response_gen)
-                full_response = llm.get_last_response()
+            wake.mute()  # désactive le wake word pendant le TTS
+            try:
+                if was_tool or full_response:
+                    if full_response:
+                        ui.show_response(full_response)
+                        # Ne pas re-parler si speak_streaming a déjà joué la réponse
+                        if not getattr(llm, "_last_was_streamed", False):
+                            tts.speak(full_response)
+                else:
+                    # Fallback : streaming pur (Ollama ou erreur groq)
+                    response_gen = llm.chat_stream(text, notes, memory_context=memory_context)
+                    tts.speak_streaming(response_gen)
+                    full_response = llm.get_last_response()
+            finally:
+                wake.unmute()  # réactive + démarre cooldown 3 s (couvre l'écho TTS)
 
             llm.add_to_history("user", text)
             llm.add_to_history("assistant", full_response)

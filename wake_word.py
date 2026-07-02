@@ -86,6 +86,10 @@ class WakeWordDetector:
         self._oww_threshold = 0.15
         self._kw_model = None         # Whisper tiny pour keyword spotting
 
+        # Cooldown inter-appels + garde TTS
+        self._last_trigger_time: float = 0.0  # persiste entre appels successifs
+        self._muted: bool = False              # True pendant que TTS parle
+
         self.strategy = self._detect_strategy()
         logger.info(f"Stratégie wake word : {self.strategy}")
         self._init_strategy()
@@ -301,7 +305,9 @@ class WakeWordDetector:
             ):
                 ring         = _deque(maxlen=WIN_CHUNKS)  # buffer circulaire
                 step_counter = 0
-                last_trigger = 0.0
+                # startup_grace : ignorer les WIN_CHUNKS premières frames (1.5 s)
+                # pour laisser l'écho TTS résiduel se dissiper au démarrage
+                startup_grace = WIN_CHUNKS
 
                 while True:
                     if _triggered.is_set():
@@ -315,17 +321,20 @@ class WakeWordDetector:
                         continue
 
                     ring.append(frame)
-                    step_counter += 1
+                    if startup_grace > 0:
+                        startup_grace -= 1
+                        continue  # période de grâce : accumule sans analyser
 
+                    step_counter += 1
                     if step_counter < STEP_CHUNKS:
                         continue
                     step_counter = 0
 
-                    # Pas assez de données ou cooldown actif
-                    if len(ring) < WIN_CHUNKS // 3:
+                    # Garde TTS active ou cooldown inter-appels
+                    if self._muted:
                         continue
                     now = time.time()
-                    if now - last_trigger < COOLDOWN:
+                    if now - self._last_trigger_time < COOLDOWN:
                         continue
 
                     # Vérifier qu'il y a de la parole dans la fenêtre
@@ -364,14 +373,15 @@ class WakeWordDetector:
                             if not GUI_MODE:
                                 print(f"\n  \033[32m✓ '{text}' → JARVIS activé\033[0m")
                             logger.info(f"Wake word détecté : '{text}'")
-                            last_trigger = now
-                            self._play_activation_sound()
-                            # Drainer la queue (repartir proprement)
+                            # Cooldown persistant + vider ring + drainer queue
+                            self._last_trigger_time = time.time()
+                            ring.clear()
                             try:
                                 while True:
                                     audio_q.get_nowait()
                             except queue.Empty:
                                 pass
+                            self._play_activation_sound()
                             return True
 
                     except Exception as e:
@@ -620,6 +630,20 @@ class WakeWordDetector:
                 pass
             self._porcupine = None
         logger.info("WakeWordDetector nettoyé")
+
+    # ------------------------------------------------------------------
+    # Garde TTS — à appeler avant/après chaque speak()
+    # ------------------------------------------------------------------
+
+    def mute(self) -> None:
+        """Désactive la détection pendant que JARVIS parle (évite l'auto-trigger)."""
+        self._muted = True
+
+    def unmute(self) -> None:
+        """Réactive la détection et démarre un cooldown de 3 s.
+        Le cooldown couvre l'écho résiduel du TTS capté par le micro."""
+        self._muted = False
+        self._last_trigger_time = time.time()  # COOLDOWN partira de maintenant
 
     def get_strategy(self) -> str:
         return self.strategy
