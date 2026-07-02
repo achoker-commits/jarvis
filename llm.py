@@ -429,6 +429,7 @@ class LLMEngine:
         self._history: list[dict] = []
         self._last_response: str = ""
         self._last_was_streamed: bool = False
+        self._nexatel_turns_remaining: int = 0  # hystérésis NexaTel block
 
         # Initialiser Groq si clé disponible
         if groq_api_key and _GROQ_AVAILABLE:
@@ -503,12 +504,24 @@ class LLMEngine:
             f"{now.strftime('%H:%M')} ({_periode}){_semaine_ctx}{_saison}"
         )
 
-        # Blocs dynamiques (accolades échappées pour éviter KeyError sur le format)
+        # ── Bloc profil (stable — identique à chaque appel si persona.yaml inchangé) ──
         user_profile = _build_user_profile_block(persona)
+        safe_profile = user_profile.replace("{", "{{").replace("}", "}}")
 
-        nexatel_relevant = _is_nexatel_relevant(query, self._history)
+        # ── Bloc NexaTel conditionnel avec hystérésis ──
+        # Quand un mot-clé NexaTel est détecté, le bloc reste actif 8 tours supplémentaires
+        # même si les questions suivantes n'en parlent plus (contexte conversationnel).
+        if _is_nexatel_relevant(query, self._history):
+            self._nexatel_turns_remaining = 9  # tour courant + 8 suivants
+        nexatel_relevant = self._nexatel_turns_remaining > 0
+        if nexatel_relevant:
+            self._nexatel_turns_remaining -= 1
         nexatel_block = _build_nexatel_block(persona) if nexatel_relevant else ""
+        safe_nexatel = nexatel_block.replace("{", "{{").replace("}", "}}")
 
+        # ── Suffixe dynamique (change à chaque appel — mis EN DERNIER pour le cache Groq) ──
+        # Ordre : _SYSTEM_CORE (stable) → profil (stable) → NexaTel (conditionnel) → dynamique
+        # Tout ce qui est AVANT le suffixe dynamique est candidat au prefix cache de Groq.
         memory_block = ""
         if memory_context.strip():
             safe_mem = memory_context.replace("{", "{{").replace("}", "}}")
@@ -516,27 +529,23 @@ class LLMEngine:
 
         notes_block = ""
         if notes:
-            lines = ["━━━ NOTES OBSIDIAN PERTINENTES ━━━\n"]
+            note_lines = ["━━━ NOTES OBSIDIAN PERTINENTES ━━━\n"]
             for note in notes:
                 title = str(note.get("title", "Note")).replace("{", "{{").replace("}", "}}")
                 preview = str(note.get("preview", "")).replace("{", "{{").replace("}", "}}")
-                lines.append(f"### {title}\n{preview}\n")
-            notes_block = "\n".join(lines)
+                note_lines.append(f"### {title}\n{preview}\n")
+            notes_block = "\n".join(note_lines)
 
-        safe_profile = user_profile.replace("{", "{{").replace("}", "}}")
-        safe_nexatel = nexatel_block.replace("{", "{{").replace("}", "}}")
-
-        context = (
-            f"\n\n━━━ CONTEXTE ━━━\n"
+        dynamic_suffix = (
+            f"━━━ CONTEXTE DYNAMIQUE ━━━\n"
             f"Utilisateur : {_user_name}\n"
             f"Date et heure : {current_datetime}\n\n"
-            + safe_profile
-            + safe_nexatel
             + memory_block
             + notes_block
         )
 
-        return _SYSTEM_CORE + context
+        # Assemblage final : stable → semi-stable → dynamique
+        return _SYSTEM_CORE + "\n\n" + safe_profile + safe_nexatel + dynamic_suffix
 
     # ------------------------------------------------------------------
     # Chat streaming

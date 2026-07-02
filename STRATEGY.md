@@ -42,10 +42,30 @@ Revue initiale : Claude Fable. Implémentation : sessions successives.
 - Cherche dans la requête courante ET les 3 derniers tours d'historique
 - Mots-clés déclencheurs : nexatel, proximus, orange, voo, client, prix, tarif, offre, abonnement, opérateur, réseau, internet, lead, prospect, pitch, convaincre, concurrent, télécom, fibre
 
+### Ordre d'assemblage (cache Groq)
+```
+_SYSTEM_CORE              ← stable — jamais modifié entre deux appels
+safe_profile              ← stable — change seulement si persona.yaml change
+safe_nexatel              ← conditionnel — deux entrées de cache (avec/sans NexaTel)
+━━━ CONTEXTE DYNAMIQUE ━━━ ← change à chaque appel, mis EN DERNIER
+  Utilisateur / Date/heure
+  Mémoire
+  Notes Obsidian
+```
+**Règle absolue : rien de dynamique ne doit précéder les blocs stables.**
+
+### Hystérésis NexaTel
+`self._nexatel_turns_remaining` (int, initialisé à 0) sur `LLMEngine` :
+- Mot-clé détecté → compteur = 9 (tour courant + 8 suivants)
+- Chaque appel à `build_system_prompt` décrémente de 1 si > 0
+- Reset automatique si un nouveau mot-clé est détecté en cours de conversation
+- Couverture : `tests/test_nexatel_hysteresis.py` (12 tests)
+
 ### Métriques
 - Prompt requête banale (ex: météo) : ~6100 chars
 - Prompt requête NexaTel : ~8100 chars
 - **Gain : ~500 tokens épargnés par appel non-NexaTel**
+- Cache Groq actif sur : `_SYSTEM_CORE` + `safe_profile` ≈ 1400+ tokens de préfixe stable
 
 ### Exemples few-shot réduits : 11 → 6 (comportements distincts)
 | # | Exemple | Comportement |
