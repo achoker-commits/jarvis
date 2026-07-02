@@ -168,15 +168,19 @@ class WakeWordDetector:
     def listen_for_wake_word(self) -> bool:
         """Bloque jusqu'à la détection du mot de réveil. Retourne True."""
         if self.strategy == self.STRATEGY_PORCUPINE:
-            return self._listen_porcupine()
+            result = self._listen_porcupine()
         elif self.strategy == self.STRATEGY_WHISPER_KW:
-            return self._listen_whisper_kw()
+            result = self._listen_whisper_kw()
         elif self.strategy == self.STRATEGY_OWW:
-            return self._listen_oww()
+            result = self._listen_oww()
         elif self.strategy == self.STRATEGY_VOSK:
-            return self._listen_vosk()
+            result = self._listen_vosk()
         else:
-            return self._listen_keyboard()
+            result = self._listen_keyboard()
+        # Bip joué APRÈS fermeture du sd.InputStream (évite le conflit CoreAudio/PaMacCore)
+        if result:
+            self._play_activation_sound()
+        return result
 
     # ------------------------------------------------------------------
     # Stratégie : Whisper KW — dit juste "Jarvis", sans "Hey"
@@ -239,17 +243,21 @@ class WakeWordDetector:
             # Confusions phonétiques courantes (Whisper tiny FR)
             "gervais", "gervals", "harvey", "garvis", "garvey",
             "djarvis", "tchervis", "java",
-            # Fragments / homophones
-            "jarv",
+            # Variantes réelles observées dans les logs vocaux d'Ali
+            "jarruille", "jarvisse", "jarrivis",
         }
         words = text.lower().split()
         for word in words:
             clean = word.strip(".,!?;:'\"")
             if not clean:
                 continue
-            if clean in _ALIASES:
+            # Normaliser les contractions françaises ("j'arvis" → "jarvis")
+            normalized = clean.replace("'", "").replace("’", "")
+            if clean in _ALIASES or normalized in _ALIASES:
                 return True
             if self._lev_ratio(clean, self.keyword) >= 0.75:
+                return True
+            if normalized != clean and self._lev_ratio(normalized, self.keyword) >= 0.75:
                 return True
         return False
 
@@ -312,7 +320,6 @@ class WakeWordDetector:
                 while True:
                     if _triggered.is_set():
                         logger.info("Activation manuelle clavier")
-                        self._play_activation_sound()
                         return True
 
                     try:
@@ -381,7 +388,6 @@ class WakeWordDetector:
                                     audio_q.get_nowait()
                             except queue.Empty:
                                 pass
-                            self._play_activation_sound()
                             return True
 
                     except Exception as e:
@@ -436,7 +442,6 @@ class WakeWordDetector:
                     result = self._porcupine.process(pcm_unpacked)
                     if result >= 0:
                         logger.info(f"Wake word détecté via Porcupine (index={result})")
-                        self._play_activation_sound()
                         return True
 
         except Exception as e:
@@ -498,7 +503,6 @@ class WakeWordDetector:
                 while True:
                     if _triggered.is_set():
                         logger.info("Activation manuelle clavier")
-                        self._play_activation_sound()
                         return True
 
                     try:
@@ -533,7 +537,6 @@ class WakeWordDetector:
                         last_trigger_time = now
                         print(f"\n  \033[32m✓ Hey Jarvis détecté (score={score:.2f})\033[0m")
                         logger.info(f"Hey Jarvis détecté (score={score:.2f})")
-                        self._play_activation_sound()
                         return True
 
         except Exception as e:
@@ -574,7 +577,6 @@ class WakeWordDetector:
                         text = result.get("text", "").lower()
                         if self.keyword in text:
                             logger.info(f"Wake word '{self.keyword}' détecté via Vosk")
-                            self._play_activation_sound()
                             return True
                     else:
                         partial = _json.loads(self._vosk_rec.PartialResult())
@@ -582,7 +584,6 @@ class WakeWordDetector:
                         if self.keyword in partial_text:
                             logger.info("Wake word détecté (partiel) via Vosk")
                             self._vosk_rec.Reset()
-                            self._play_activation_sound()
                             return True
 
         except Exception as e:
@@ -596,7 +597,6 @@ class WakeWordDetector:
     def _listen_keyboard(self) -> bool:
         try:
             input()  # Attend simplement un appui sur Entrée
-            self._play_activation_sound()
             return True
         except EOFError:
             time.sleep(0.5)

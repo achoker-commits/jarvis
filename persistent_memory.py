@@ -20,6 +20,7 @@ class PersistentMemory:
     def __init__(self, filepath: Optional[str] = None):
         self._path = Path(filepath) if filepath else MEMORY_FILE
         self._data = self._load()
+        self._extract_turn_counter: int = 0  # limite appels LLM : 1 sur 3
         logger.info(f"Mémoire persistante chargée : {len(self._data.get('facts', []))} faits")
 
     def _load(self) -> dict:
@@ -80,6 +81,14 @@ class PersistentMemory:
         ]
         removed = before - len(self._data["facts"])
         if removed:
+            self._save()
+        return removed
+
+    def forget_last_facts(self, n: int = 3) -> int:
+        """Supprime les n derniers faits mémorisés (commande vocale 'oublie ça')."""
+        removed = min(n, len(self._data["facts"]))
+        if removed:
+            self._data["facts"] = self._data["facts"][:-removed]
             self._save()
         return removed
 
@@ -168,103 +177,88 @@ class PersistentMemory:
         ).start()
 
     def _extract_worker(self, user_text: str, jarvis_response: str, llm) -> None:
-        """Worker d'extraction (thread secondaire)."""
+        """Worker d'extraction (thread secondaire). Critères stricts : faits durables uniquement."""
         import re as _re
 
-        combined = f"{user_text} {jarvis_response}"
+        # ── Exclusions : états transitoires ou problèmes techniques ──────────
+        _EXCLUSION_RE = _re.compile(
+            r"(?:je pense qu['']il y a|il faut que|il y a un souci|"
+            r"ça fait des|ça grésille|ça bug|ça marche pas|"
+            r"je suis en train|je vais vérifier|j['']essaie|"
+            r"tu m['']entends|tu entends|grésillement|feedback|"
+            r"problème audio|problème micro|erreur|bug jarvis|"
+            r"on règle|c['']est réglé|c['']est corrigé|ça devrait|"
+            r"test|testing|un deux trois)",
+            _re.IGNORECASE,
+        )
+        if _EXCLUSION_RE.search(user_text):
+            return  # échange technique → rien à mémoriser
+
         extracted = []
 
-        # ── Heuristiques locales (0ms) ─────────────────────────────────────
+        # ── Heuristiques — UNIQUEMENT faits durables et explicites ──────────
         _FACT_TRIGGERS = [
-            # Préférences personnelles
-            (r"\bj[e']? (?:préfère|aime|adore|déteste|veux|souhaite)\b.{10,80}", "préférence"),
-            # Intentions proches
-            (r"\bje (?:vais|compte|prévois|prépare|pense)\b.{10,80}", "intention"),
-            # Leads NexaTel — détection enrichie
-            (r"\bnouveau (?:client|prospect|lead|contact)\b.{0,80}", "lead nexatel"),
-            (r"\bclient (?:chez|avec|nommé|appelé|qui s'appelle)\b.{5,80}", "client nexatel"),
-            (r"\b(?:j['']ai|j['']ai eu|j['']ai trouvé|j['']ai contacté)\s+(?:un (?:nouveau )?client|un lead|un prospect)\b.{0,80}", "lead nexatel"),
-            (r"\bclient (?:Orange|VOO|Telenet|Scarlet|Proximus boutique)\b.{0,80}", "lead nexatel qualifié"),
+            # Préférences durables
+            (r"\bj[e']? (?:préfère|aime|adore|déteste)\b.{10,60}", "préférence"),
+            # Leads NexaTel (faits commerciaux concrets)
+            (r"\bnouveau (?:client|prospect|lead|contact)\b.{0,60}", "lead nexatel"),
+            (r"\bclient (?:chez|nommé|appelé|qui s'appelle)\b.{5,60}", "client nexatel"),
+            (r"\b(?:j['']ai (?:trouvé|contacté|eu))\s+(?:un (?:nouveau )?client|un lead|un prospect)\b.{0,60}", "lead nexatel"),
+            (r"\bclient (?:Orange|VOO|Telenet|Scarlet|Proximus boutique)\b.{0,60}", "lead qualifié"),
             # Conversions / succès commerciaux
-            (r"\b(?:j['']ai (?:gagné|vendu|signé|converti|closé|conclu))\b.{10,80}", "succès nexatel"),
-            (r"\b(?:contrat signé|deal (?:signé|conclu)|client converti)\b.{0,60}", "conversion nexatel"),
-            # Rendez-vous avec heure/jour
-            (r"\b(?:rdv|réunion|rencontre|entretien|appel)\b.{0,20}\b(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|demain|après-demain|ce soir|ce matin)\b.{0,60}", "rdv"),
-            (r"\bréunion\b.{0,10}\b(?:à|vers|de)\s+\d{1,2}h\b.{0,50}", "rdv"),
-            # Objectifs et plans
-            (r"\bmon objectif\b.{10,80}", "objectif"),
-            (r"\bje (?:vise|cherche à|essaie de|veux atteindre)\b.{10,80}", "objectif"),
-            # Revenus et finances
-            (r"\b(?:j['']ai (?:fait|gagné|touché))\s+\d+\s*(?:€|euro|eur)\b.{0,60}", "revenu"),
-            # Problèmes à retenir
-            (r"\b(?:problème|bug|erreur|ça marche pas|ça ne marche pas)\b.{5,60}", "problème"),
-            # Facebook / marketing
-            (r"\b(?:groupe|post|commentaire|dm|message)\s+(?:facebook|fb)\b.{0,60}", "marketing fb"),
-            # Budget / investissement
-            (r"\b(?:j['']ai dépensé|j['']ai investi|budget|coût|ça m'a coûté)\b.{5,60}", "finance"),
-            # Prospection active
-            (r"\b(?:j['']ai envoyé|j['']ai posté|j['']ai écrit|j['']ai répondu)\b.{10,80}", "prospection"),
-            # Devis / commande
-            (r"\b(?:devis|commande|bon de commande|facture|paiement)\b.{0,60}", "commercial"),
-            # Appel avec heure
-            (r"\bappel\b.{0,15}\b(?:à|vers)\s+\d{1,2}h\b.{0,50}", "rdv téléphonique"),
-            # Prénom client mémorisé
-            (r"\b(?:mon client|le client|chez le client)\s+(?:[A-Z][a-z]{2,15})\b.{0,60}", "client nommé"),
-            # Conversation client — "j'ai parlé à / avec [prénom]"
-            (r"\bj['']ai (?:parlé|discuté|échangé)\s+(?:à|avec)\s+[A-Z][a-z]{2,15}\b.{0,60}", "échange client"),
-            # Numéro de contact client
-            (r"\b(?:son numéro|son tel|son téléphone|son contact)\b.{5,60}", "contact client"),
-            # Compte rendu d'appel
-            (r"\bj['']ai (?:appelé|rappelé|eu au téléphone)\s+.{5,60}", "appel client"),
-            # Objectif chiffré — "je veux X clients", "j'ai besoin de X leads"
-            (r"\bje veux\s+\d+\s+(?:client|lead|prospect|vente|conversion)\b.{0,60}", "objectif chiffré"),
-            (r"\b(?:mon objectif|objectif du mois)\s+(?:c'est|est)\s+\d+.{0,60}", "objectif chiffré"),
-            # Commission / revenu mensuel
-            (r"\b(?:ma commission|mes revenus|mon revenu|mon chiffre d'affaires)\b.{5,60}", "revenu"),
-            # Rendu de travail — "j'ai terminé", "j'ai fini"
-            (r"\bj['']ai (?:terminé|fini|complété|réalisé)\b.{10,60}", "tâche terminée"),
-            # Apprentissage ou décision prise
-            (r"\bj['']ai (?:appris|décidé|choisi|compris)\b.{10,60}", "décision"),
+            (r"\b(?:contrat signé|deal (?:signé|conclu)|client converti|j['']ai signé)\b.{0,60}", "conversion"),
+            (r"\bj['']ai (?:vendu|closé|conclu)\b.{10,60}", "vente"),
+            # Rendez-vous avec jour ET heure (les deux requis → plus strict)
+            (r"\b(?:rdv|réunion|entretien)\b.{0,20}\b(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|demain)\b.{0,20}\b(?:à|vers)\s*\d{1,2}h\b.{0,40}", "rdv"),
+            # Revenus chiffrés
+            (r"\bj['']ai (?:fait|gagné|touché)\s+\d+\s*(?:€|euro|eur)\b.{0,40}", "revenu"),
+            # Objectifs chiffrés
+            (r"\bje veux\s+\d+\s+(?:client|lead|prospect|vente)\b.{0,40}", "objectif chiffré"),
+            (r"\b(?:mon objectif|objectif du mois)\s+(?:c'est|est)\s+\d+.{0,40}", "objectif chiffré"),
+            # Prénom client mémorisé explicitement
+            (r"\b(?:mon client|le client)\s+[A-Z][a-z]{2,15}\b.{0,40}", "client nommé"),
+            # Décisions claires
+            (r"\bj['']ai (?:décidé|choisi)\b.{10,60}", "décision"),
         ]
 
-        for pattern, category in _FACT_TRIGGERS:
+        for pattern, _ in _FACT_TRIGGERS:
             for m in _re.finditer(pattern, user_text, _re.IGNORECASE):
-                fact_text = m.group(0)[:120].strip()
+                fact_text = m.group(0)[:100].strip()
                 if len(fact_text) > 15:
                     extracted.append(fact_text)
+                    break  # 1 match par pattern max
 
-        # ── Extraction LLM (si disponible et peu de faits trouvés) ──────────
-        if llm and len(extracted) < 2:
+        # ── Extraction LLM — seulement 1 tour sur 3 (réduit les 429) ────────
+        self._extract_turn_counter += 1
+        use_llm = llm and not extracted and (self._extract_turn_counter % 3 == 0)
+        if use_llm:
             try:
                 prompt = (
-                    f"Ali dit : \"{user_text[:300]}\"\n"
-                    f"JARVIS répond : \"{jarvis_response[:200]}\"\n\n"
-                    "Extrait en 1-2 faits courts et importants à mémoriser sur Ali. "
-                    "Seulement s'il y a quelque chose de vraiment notable (client, objectif, préférence, décision). "
-                    "Réponds en JSON : {\"facts\": [\"fait 1\", \"fait 2\"]} ou {\"facts\": []} si rien d'important."
+                    f"Ali dit : \"{user_text[:250]}\"\n\n"
+                    "Y a-t-il UN fait DURABLE à mémoriser ? (client, préférence, décision, objectif chiffré, RDV confirmé). "
+                    "PAS les états transitoires, problèmes techniques, ni les conversations banales. "
+                    "Réponds JSON : {\"fact\": \"fait concis\"} ou {\"fact\": null} si rien."
                 )
                 raw = llm.chat_sync(
                     prompt,
-                    system="Tu extrais des faits mémorables sur l'utilisateur. Sois concis. Format JSON uniquement.",
-                    max_tokens=80,
+                    system="Extraction mémoire. JSON uniquement. Très sélectif.",
+                    max_tokens=60,
                 )
                 if raw:
                     import json as _json
                     import re as _re2
-                    # Chercher le JSON dans la réponse
-                    m = _re2.search(r'\{[^}]+\}', raw, _re2.DOTALL)
+                    m = _re2.search(r'\{.*?\}', raw, _re2.DOTALL)
                     if m:
                         data = _json.loads(m.group(0))
-                        for f in data.get("facts", []):
-                            if isinstance(f, str) and len(f) > 10:
-                                extracted.append(f)
+                        f = data.get("fact")
+                        if f and isinstance(f, str) and len(f) > 10:
+                            extracted.append(f)
             except Exception as e:
                 logger.debug(f"Extraction LLM échouée : {e}")
 
-        # ── Sauvegarder les faits extraits ───────────────────────────────────
-        for fact in extracted[:3]:   # max 3 faits par échange
-            if fact and len(fact) > 10:
-                self.save_fact(fact)
+        # ── Sauvegarder — max 1 fait par échange ─────────────────────────────
+        if extracted:
+            self.save_fact(extracted[0])
 
     def clear_all(self) -> None:
         self._data = {"user": {}, "facts": [], "last_sessions": [], "preferences": {}}

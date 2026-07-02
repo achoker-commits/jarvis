@@ -284,6 +284,39 @@ Si l'utilisateur mentionne un rendez-vous, un prénom, une préférence personne
 
 import re as _re_tp  # import local pour ne pas polluer le namespace module
 
+# Requêtes conversationnelles pures → aucun outil nécessaire (tool_choice="none")
+_CONVERSATIONAL_RE = _re_tp.compile(
+    r"^\s*(?:"
+    r"comment tu vas|ça va|comment ça va|t['']es là|tu es là|"
+    r"tu m['']entends|tu entends|tu m'entends|"
+    r"(?:tu (?:marches|fonctionnes|réponds|es là))"
+    r"|(?:ça (?:fait des|grésille|résonne|bug|marche|tourne))"
+    r"|(?:bonjour|bonsoir|salut|hello|coucou)"
+    r"|(?:bonne (?:nuit|journée|soirée|matinée))"
+    r"|(?:merci|de rien|pas de problème|pas grave)"
+    r"|(?:d['']accord|ok|okay|ouais|ouaip|yep)"
+    r"|(?:cool|super|parfait|nickel|génial|top|bien|excellent)"
+    r"|(?:voilà|c['']est bon|c['']est tout|ça suffit)"
+    r"|(?:oui|non|si|peut-être|je sais pas)"
+    r"|(?:exactement|tout à fait|absolument|bien sûr)"
+    r"|(?:arrête|stop|pause|attends)"
+    r"|(?:qui es.tu|qu['']est.ce que tu es|tu es quoi|présente.toi)"
+    r"|(?:test(?:ing)?|un deux trois|1 2 3)"
+    r"|(?:ah|hmm|euh|hein|quoi|huh)"
+    r")\s*[!?.]*\s*$",
+    _re_tp.IGNORECASE | _re_tp.UNICODE,
+)
+
+# Outils toujours inclus dans tout subset (mémorisation proactive + info actuelle)
+_TOOLS_ALWAYS = frozenset({"memoriser", "recherche_info"})
+
+# Subset par défaut quand aucun outil spécifique n'est détecté
+_TOOLS_CORE = frozenset({
+    "ouvrir_application", "volume", "systeme", "meteo",
+    "minuteur", "alarme", "memoriser", "recherche_info",
+    "musique_spotify", "actualites",
+})
+
 # Patterns déclaratifs pour le routage d'outils.
 # Liste ordonnée de (outil, [regex_patterns]) — première correspondance gagne.
 # Utiliser \b (word boundary) pour éviter les faux positifs.
@@ -784,6 +817,34 @@ class LLMEngine:
 
         return ""
 
+    def _select_tools(self, user_text: str) -> tuple[list, str]:
+        """
+        Retourne (tools_subset, tool_choice) selon le contexte de la requête.
+        Réduit de 19 → 2-10 outils pour limiter les erreurs de génération.
+        - Conversationnel pur  → [], "none"   (aucun outil, aucun risque malformé)
+        - Outil détecté        → [outil+always], "auto"
+        - Requête générale     → [core 10], "auto"
+        """
+        from jarvis_tools import TOOLS
+        _tool_map = {t["function"]["name"]: t for t in TOOLS}
+
+        if _CONVERSATIONAL_RE.match(user_text.strip()):
+            return [], "none"
+
+        import re as _re_sel
+        detected: list[str] = []
+        for tool_name, patterns in _TOOL_PATTERNS:
+            if any(_re_sel.search(p, user_text, _re_sel.IGNORECASE) for p in patterns):
+                detected.append(tool_name)
+                if len(detected) >= 3:
+                    break
+
+        if detected:
+            names = set(detected) | _TOOLS_ALWAYS
+            return [_tool_map[n] for n in names if n in _tool_map], "auto"
+
+        return [_tool_map[n] for n in _TOOLS_CORE if n in _tool_map], "auto"
+
     def chat_with_tools(
         self,
         user_text: str,
@@ -812,28 +873,33 @@ class LLMEngine:
         messages += list(self._history)
         messages.append({"role": "user", "content": user_text})
 
-        # Forçage d'outil pour données dynamiques (météo, batterie, CPU/RAM, actualités)
+        # Sélectionner le subset d'outils et tool_choice selon le contexte
         forced_tool_name = self._force_tool_for_query(user_text)
         if forced_tool_name:
+            # Outil forcé : on n'envoie que ce tool précis → moins de bruit pour le modèle
+            tools_for_call = [t for t in TOOLS if t["function"]["name"] == forced_tool_name]
             tool_choice = {"type": "function", "function": {"name": forced_tool_name}}
         else:
-            tool_choice = "auto"
+            tools_for_call, tool_choice = self._select_tools(user_text)
 
         # Streaming Groq : détecte tool call ou texte en temps réel → TTS par phrase
         try:
             _max_retries = 2
             for _attempt in range(_max_retries):
                 try:
-                    stream = self._groq_client.chat.completions.create(
+                    _call_kwargs: dict = dict(
                         model=self.groq_model,
                         messages=messages,
-                        tools=TOOLS,
-                        tool_choice=tool_choice,
                         max_tokens=400,
                         temperature=0.6,
                         stream=True,
                         parallel_tool_calls=False,
                     )
+                    if tools_for_call:
+                        _call_kwargs["tools"] = tools_for_call
+                        _call_kwargs["tool_choice"] = tool_choice
+                    # tool_choice="none" → pas de paramètre tools du tout
+                    stream = self._groq_client.chat.completions.create(**_call_kwargs)
                     break  # succès
                 except Exception as _retry_err:
                     err_str = str(_retry_err).lower()

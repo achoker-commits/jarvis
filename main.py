@@ -455,6 +455,24 @@ def run_main_loop(config: Config, ui: JarvisUI, components: dict) -> None:
             else:
                 text_for_llm = text
 
+            # Commande vocale "oublie ça" — purge les 3 derniers faits mémorisés
+            _FORGET_RE = __import__("re").compile(
+                r"\b(?:oublie\s+(?:ça|ca|le dernier|les derniers|ce que tu viens)|"
+                r"supprime\s+(?:le dernier fait|les derniers faits|ce que tu as mémorisé))\b",
+                __import__("re").IGNORECASE,
+            )
+            if persistent_mem and _FORGET_RE.search(text):
+                n = persistent_mem.forget_last_facts(3)
+                _msg = f"J'ai effacé {n} fait{'s' if n > 1 else ''} mémorisé{'s' if n > 1 else ''}." if n else "Aucun fait à effacer."
+                wake.mute()
+                try:
+                    tts.speak(_msg)
+                finally:
+                    wake.unmute()
+                llm.add_to_history("user", text)
+                llm.add_to_history("assistant", _msg)
+                continue
+
             # Filler instantané depuis le pré-cache (réduit la perception de latence)
             tts.speak_filler()
 
