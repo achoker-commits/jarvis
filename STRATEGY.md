@@ -17,6 +17,45 @@ Revue initiale : Claude Fable. Implémentation : sessions successives.
 | 7 | Sections system prompt conditionnelles | `llm.py` | ✅ |
 | 8 | Streaming Groq → TTS par phrase + 4 cas limites | `llm.py`, `tts.py` | ✅ |
 | 9 | Cache TTS LRU 500 MB avec éviction par `st_atime` | `tts.py` | ✅ |
+| 7 | Sections system prompt conditionnelles — NexaTel bloc injecté seulement si pertinent | `llm.py` | ✅ |
+
+---
+
+## Détail point 7 — Restructuration system prompt
+
+### Problème avant
+- `_SYSTEM_PERSONA` injectait TOUT (profil user + prix NexaTel + arguments + règles) à chaque appel
+- ~2000 chars (~500 tokens) de données NexaTel injectées même pour "quelle heure est-il ?"
+- Le préfixe du prompt changeait à chaque appel (persona_block avant la partie stable) → cache Groq inutilisable
+
+### Architecture après
+
+| Section | Contenu | Stabilité |
+|---|---|---|
+| `_SYSTEM_CORE` | Identité, règles ton, outils, 6 exemples, mémorisation | **Identique à chaque appel** → cache Groq |
+| `_build_user_profile_block()` | Profil user + personnalité (sans prix NexaTel) | Stable (ne change que si persona.yaml change) |
+| `_build_nexatel_block()` | Prix, arguments, règles NexaTel | **Conditionnel** — injecté seulement si pertinent |
+| Contexte dynamique | Date/heure, mémoire, notes Obsidian | Change par appel |
+
+### Logique de détection NexaTel
+`_is_nexatel_relevant(query, history, last_n=3)` :
+- Cherche dans la requête courante ET les 3 derniers tours d'historique
+- Mots-clés déclencheurs : nexatel, proximus, orange, voo, client, prix, tarif, offre, abonnement, opérateur, réseau, internet, lead, prospect, pitch, convaincre, concurrent, télécom, fibre
+
+### Métriques
+- Prompt requête banale (ex: météo) : ~6100 chars
+- Prompt requête NexaTel : ~8100 chars
+- **Gain : ~500 tokens épargnés par appel non-NexaTel**
+
+### Exemples few-shot réduits : 11 → 6 (comportements distincts)
+| # | Exemple | Comportement |
+|---|---|---|
+| 1 | "Comment tu vas ?" | Small talk / ton naturel |
+| 2 | "Lance Spotify." | Tool call action (sans commenter) |
+| 3 | "Combien vaut le bitcoin ?" | Tool call données dynamiques |
+| 4 | "J'suis fatigué." | Réponse émotionnelle |
+| 5 | "T'es con toi." | Confrontation / humour sec |
+| 6 | "Un client qui hésite..." | Contexte business |
 
 ---
 

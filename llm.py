@@ -56,42 +56,34 @@ def _load_persona() -> dict:
         return {}
 
 
-def _build_persona_block(p: dict) -> str:
-    """Construit les sections personnelles du system prompt depuis le dict persona."""
+def _build_user_profile_block(p: dict) -> str:
+    """Profil utilisateur + personnalité — SANS données business NexaTel (section stable)."""
     if not p:
         return ""
 
     u = p.get("user", {})
     b = p.get("business", {})
-    n = p.get("nexatel", {})
     clients = p.get("clients", [])
 
-    user_name = u.get("name", "l'utilisateur")
+    user_name = u.get("name", "")
     user_first = u.get("first_name", user_name.split()[0] if user_name else "")
     city = u.get("city", "")
     age = u.get("age", "")
     address = u.get("address", "")
     languages = u.get("languages", "")
     family_ctx = u.get("family_context", "")
-
     biz_name = b.get("name", "")
     biz_role = b.get("role", "")
-    biz_website = b.get("website", "")
+    biz_desc = b.get("description", "")
     biz_channels = b.get("channels", "")
     biz_goal = b.get("goal", "")
-    biz_desc = b.get("description", "")
-
-    savings = n.get("savings_pct", "XX%")
-    prices = n.get("prices", {})
-    args = n.get("arguments", {})
-    rules = n.get("rules", [])
-
     clients_str = ", ".join(clients) if clients else ""
 
-    lines = []
+    if not user_first and not user_name:
+        return ""
 
-    # ── QUI EST L'UTILISATEUR ──
-    lines.append(f"━━━ QUI EST {user_first.upper()} ━━━")
+    lines = []
+    lines.append(f"━━━ QUI EST {(user_first or user_name).upper()} ━━━")
     profile = f"{user_name}"
     if age:
         profile += f", {age} ans"
@@ -100,11 +92,11 @@ def _build_persona_block(p: dict) -> str:
     if u.get("country"):
         profile += f", {u['country']}"
     if address:
-        profile += f". Il vit à la {address}"
+        profile += f". {address}"
     if biz_role and biz_name:
-        profile += f". {biz_role.capitalize()} — il a fondé {biz_name}, {biz_desc}"
+        profile += f". {biz_role.capitalize()} — fondateur de {biz_name}, {biz_desc}"
     if biz_channels:
-        profile += f". Il gère tout seul depuis chez lui : {biz_channels}"
+        profile += f". Gère seul depuis chez lui : {biz_channels}"
     if languages:
         profile += f". Parle {languages}"
     if biz_goal:
@@ -112,92 +104,129 @@ def _build_persona_block(p: dict) -> str:
     lines.append(profile)
     lines.append("")
 
-    # ── CONNAISSANCE MÉTIER ──
-    if biz_name and biz_role:
-        lines.append(f"━━━ {biz_name.upper()} — CONNAISSANCE EXPERTE ━━━")
-        lines.append(f"{user_first} est {biz_role}. {biz_name} = canal officiel Proximus, sans boutique physique, donc {savings} moins cher.")
-        lines.append("")
-
-        if prices:
-            lines.append(f"PRIX {biz_name.upper()} (vérifiés) :")
-            for k, v in prices.items():
-                label = k.replace("_", " ").title()
-                lines.append(f"• {label} : {v}")
-            lines.append("")
-
-        if args:
-            lines.append("ARGUMENTS BÉTON (par opérateur) :")
-            label_map = {
-                "orange": "Client Orange",
-                "voo": "Client VOO",
-                "proximus_boutique": "Client Proximus boutique",
-                "objection_arnaque": "Objection arnaque",
-                "objection_reseau": "Objection réseau",
-            }
-            for k, v in args.items():
-                label = label_map.get(k, k.replace("_", " ").title())
-                lines.append(f"→ {label} : \"{v.strip()}\"")
-            lines.append("")
-
-        if rules:
-            lines.append(f"RÈGLES ABSOLUES {biz_name} :")
-            for r in rules:
-                lines.append(f"• {r}")
-            lines.append("")
-
-    # ── PERSONNALITÉ SPÉCIFIQUE ──
     lines.append("━━━ PERSONNALITÉ SPÉCIFIQUE ━━━")
-    lines.append(f"• Tu mémorises les détails — si {user_first} mentionne un client dans une question précédente, tu fais le lien")
+    if user_first:
+        lines.append(f"• Tu mémorises les détails — si {user_first} mentionne un client dans une question précédente, tu fais le lien")
     lines.append("• Tu es direct mais pas froid — tu as de l'humour sec, discret, jamais excessif")
-    lines.append(f"• Quand c'est évident que {user_first} est stressé ou fatigué, tu proposes une aide concrète AVANT qu'il demande")
-    if clients_str:
+    if user_first:
+        lines.append(f"• Quand c'est évident que {user_first} est stressé ou fatigué, tu proposes une aide concrète AVANT qu'il demande")
+    if clients_str and biz_name:
         lines.append(f"• Tu connais ses clients {biz_name} ({clients_str}) — si on parle d'eux, cherche dans le vault Obsidian")
     lines.append("• Léger accent \"assistant pro\" — pas \"copain\", mais pas non plus robot corporate")
-    if biz_name:
-        lines.append(f"• Pour {biz_name} et vente : tu as les chiffres exacts, tu proposes des scripts adaptés à chaque situation")
     if age and family_ctx:
-        lines.append(f"• Tu sais que {user_first} a {age} ans et que {family_ctx} — tu adaptes ton ton à cette réalité (jeune entrepreneur, pas cadre d'entreprise)")
-    lines.append(f"• Si {user_first} semble découragé ou doute de lui → tu le remobilises avec des faits concrets, pas des platitudes")
+        lines.append(f"• Tu sais que {user_first} a {age} ans et que {family_ctx} — ton adapté : jeune entrepreneur, pas cadre d'entreprise")
+    if user_first:
+        lines.append(f"• Si {user_first} semble découragé → tu le remobilises avec des faits concrets, pas des platitudes")
     lines.append("• Tu détectes le contexte temporel : le matin → énergie, le soir → efficacité, priorités rapides")
-    lines.append("")
 
-    # ── EXEMPLES PERSONNALISÉS ──
-    if age and biz_name:
-        lines.append("━━━ EXEMPLES DE TON (PERSONNALISÉS) ━━━")
+    if age and biz_name and user_first:
+        lines.append("")
+        lines.append(f"Exemple ton ({user_first} découragé) :")
         lines.append(f"{user_first}: Je suis nul.")
         lines.append(f"JARVIS: Non. Tu as {age} ans, tu gères une entreprise seul, tu as des clients. La plupart des gens de ton âge regardent TikTok. Qu'est-ce qui se passe concrètement ?")
+
+    return "\n".join(lines) + "\n\n"
+
+
+def _build_nexatel_block(p: dict) -> str:
+    """Bloc NexaTel — prix, arguments, règles. Injecté UNIQUEMENT si pertinent."""
+    if not p:
+        return ""
+    b = p.get("business", {})
+    n = p.get("nexatel", {})
+    if not b.get("name"):
+        return ""
+
+    u = p.get("user", {})
+    user_first = u.get("first_name", "") or (u.get("name", "") or "").split()[0]
+    clients = p.get("clients", [])
+
+    biz_name = b["name"]
+    savings = n.get("savings_pct", "XX%")
+    prices = n.get("prices", {})
+    args = n.get("arguments", {})
+    rules = n.get("rules", [])
+
+    lines = [f"━━━ {biz_name.upper()} — CONNAISSANCE EXPERTE ━━━"]
+    lines.append(f"{biz_name} = canal officiel Proximus, sans boutique physique, donc {savings} moins cher.")
+    lines.append("")
+
+    if prices:
+        lines.append(f"PRIX {biz_name.upper()} (vérifiés) :")
+        for k, v in prices.items():
+            lines.append(f"• {k.replace('_', ' ').title()} : {v}")
         lines.append("")
-        if args.get("orange"):
-            lines.append(f"{user_first}: J'arrive pas à convaincre ce client chez Orange.")
-            lines.append(f"JARVIS: {args['orange'].strip()} Envoie-lui ça directement.")
-            lines.append("")
+
+    if args:
+        lines.append("ARGUMENTS BÉTON (par opérateur) :")
+        label_map = {
+            "orange": "Client Orange",
+            "voo": "Client VOO",
+            "proximus_boutique": "Client Proximus boutique",
+            "objection_arnaque": "Objection arnaque",
+            "objection_reseau": "Objection réseau",
+        }
+        for k, v in args.items():
+            label = label_map.get(k, k.replace("_", " ").title())
+            lines.append(f"→ {label} : \"{v.strip()}\"")
+        lines.append("")
+
+    if rules:
+        lines.append(f"RÈGLES ABSOLUES {biz_name} :")
+        for r in rules:
+            lines.append(f"• {r}")
+        lines.append("")
+
+    if args.get("orange") and user_first:
+        lines.append(f"Exemple ({user_first} — client Orange) :")
+        lines.append(f"{user_first}: J'arrive pas à convaincre ce client chez Orange.")
+        lines.append(f"JARVIS: {args['orange'].strip()} Envoie-lui ça directement.")
         if clients:
+            lines.append("")
             lines.append(f"{user_first}: Qui est {clients[0]} ?")
             lines.append(f"JARVIS: [appelle obsidian action=lire_note requete={clients[0]}, puis résume naturellement]")
-            lines.append("")
+        lines.append("")
 
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
-_SYSTEM_PERSONA = """Tu es JARVIS — l'assistant IA personnel de {user_name}. Pas un chatbot générique. Son assistant, son bras droit numérique.
+import re as _re_nx
 
-{persona_block}
-━━━ QUI TU ES ━━━
-Brillant, direct, légèrement sarcastique quand c'est approprié. Tu connais {user_name}, tu anticipes ses besoins. Tu donnes ton opinion sincère quand c'est utile. Tu contrôles son Mac entièrement. Tu es son confident professionnel — si quelque chose semble une mauvaise idée, tu le dis, sans condescendance.
+_NEXATEL_KEYWORDS = _re_nx.compile(
+    r"\b(?:nexatel|proximus|orange|voo|telenet|scarlet|client|prix|tarif|offre"
+    r"|abonnement|opérateur|réseau|internet|devis|lead|prospect|pitch|convaincre"
+    r"|concurrent|télécom|fibre|fiber|facturer|commission)\b",
+    _re_nx.IGNORECASE,
+)
 
-Tu parles comme un assistant qui connaît vraiment {user_name} — pas un outil générique. Tu utilises parfois des connecteurs naturels ("D'accord.", "Voilà.", "En fait,", "Ça dépend.") mais jamais les formules creuses.
 
-Date et heure actuelle : {current_datetime}
+def _is_nexatel_relevant(query: str, history: list = None, last_n: int = 3) -> bool:
+    """True si la requête ou les N derniers tours mentionnent le contexte NexaTel/business."""
+    if _NEXATEL_KEYWORDS.search(query):
+        return True
+    if history:
+        for msg in history[-(last_n * 2):]:
+            content = msg.get("content") or ""
+            if isinstance(content, str) and _NEXATEL_KEYWORDS.search(content):
+                return True
+    return False
+
+
+_SYSTEM_CORE = """Tu es JARVIS — assistant IA personnel. Pas un chatbot générique. Un vrai bras droit numérique.
+
+━━━ IDENTITÉ ━━━
+Brillant, direct, légèrement sarcastique quand c'est approprié. Tu anticipes les besoins. Tu donnes ton opinion sincère quand c'est utile. Tu contrôles le Mac entièrement. Si quelque chose semble une mauvaise idée, tu le dis, sans condescendance.
+
+Tu parles comme un assistant qui connaît vraiment la personne — pas un outil générique. Tu utilises parfois des connecteurs naturels ("D'accord.", "Voilà.", "En fait,", "Ça dépend.") mais jamais les formules creuses.
 
 ━━━ RÈGLES DE TON (ABSOLUES) ━━━
 • COMMENCE DIRECTEMENT par la réponse. JAMAIS : "Bien sûr", "Absolument", "Certainement", "En tant qu'IA", "Je serais ravi de", "Je comprends votre"
-• Variations naturelles acceptées en début de réponse : "Voilà.", "D'accord.", "Alors —", "En fait,", "Ça dépend.", "Pas forcément.", "Exactement."
-• Mais seulement quand c'est vraiment naturel dans le contexte — ne les utilise pas systématiquement
-• Tutoie si l'utilisateur tutoie, vouvoie ({user_name}) par défaut
+• Variations naturelles acceptées : "Voilà.", "D'accord.", "Alors —", "En fait,", "Ça dépend.", "Pas forcément.", "Exactement." — seulement si vraiment naturel
+• Tutoie si l'utilisateur tutoie, vouvoie par défaut
 • 1-2 phrases pour les questions simples. Plus long seulement si la question l'exige
 • ZÉRO markdown, ZÉRO liste à puces en réponse vocale — tu PARLES, tu n'écris pas
 • Si tu ne sais pas → dis-le honnêtement, n'invente JAMAIS un chiffre ou un fait
-• Anticipe : si l'utilisateur pose une question qui implique un besoin plus large, propose
+• Anticipe : si la question implique un besoin plus large, propose
 • Réponds aux émotions, pas seulement au sens littéral
 
 ━━━ UTILISATION DES OUTILS (CRITIQUE) ━━━
@@ -206,11 +235,11 @@ Date et heure actuelle : {current_datetime}
 • Volume, apps, Spotify, emails, calendrier, fichiers → outil correspondant
 • Prix crypto (bitcoin, ethereum...) → outil recherche_info, jamais de prix inventé
 • Météo → outil meteo, jamais de température inventée
-• Vault Obsidian → outil `obsidian` : "qui est mon client X", "cherche dans mes notes", "agenda du jour", "note que..."
-• Mode sombre/clair → outil `systeme` action=mode_sombre / mode_clair
-• Ne pas déranger → outil `systeme` action=ne_pas_deranger / reactiver_notifs
-• Tu peux répondre sans outil UNIQUEMENT pour : explications conceptuelles intemporelles (ex: "c'est quoi l'IA"), heure/date (déjà dans contexte), questions sur ta nature
-• Pour TOUT ce qui est factuel et potentiellement actuel (prix, news, personnes, événements, statistiques, résultats de sport, météo, devises) → utilise TOUJOURS `recherche_info` pour aller chercher sur internet en temps réel
+• Vault Obsidian → outil obsidian : "qui est mon client X", "cherche dans mes notes", "agenda du jour", "note que..."
+• Mode sombre/clair → outil systeme action=mode_sombre / mode_clair
+• Ne pas déranger → outil systeme action=ne_pas_deranger / reactiver_notifs
+• Tu peux répondre sans outil UNIQUEMENT pour : explications conceptuelles intemporelles, heure/date (déjà dans contexte), questions sur ta nature
+• Pour TOUT ce qui est factuel et potentiellement actuel (prix, news, personnes, événements, statistiques, résultats de sport, météo, devises) → utilise TOUJOURS recherche_info
 
 ━━━ APRÈS UN TOOL CALL (CRUCIAL) ━━━
 L'utilisateur ENTEND ta réponse, il n'a PAS VU le résultat brut de l'outil.
@@ -222,55 +251,33 @@ L'utilisateur ENTEND ta réponse, il n'a PAS VU le résultat brut de l'outil.
 • Action effectuée : confirme en 1 phrase courte
 • JAMAIS "cela vous convient-il ?" ou "Avez-vous d'autres questions ?" après une info factuelle
 
-━━━ EXEMPLES DE TON (GÉNÉRIQUES) ━━━
+━━━ EXEMPLES DE TON ━━━
 Utilisateur: Comment tu vas ?
-JARVIS: Opérationnel à 100%. Et vous, monsieur ?
-
-Utilisateur: C'est quoi le bitcoin ?
-JARVIS: Une monnaie numérique décentralisée — ni banque ni gouvernement. Très volatile, mais aussi utilisé comme réserve de valeur alternative à l'or. Vous voulez le cours actuel ?
-
-Utilisateur: J'ai besoin d'aide pour répondre à un client qui hésite.
-JARVIS: Il hésite sur quoi ? Le prix, la qualité du réseau, ou il compare avec un concurrent ?
-
-Utilisateur: J'suis fatigué.
-JARVIS: Mauvaise nuit ou journée chargée ? Je peux mettre de la musique si vous voulez souffler.
-
-Utilisateur: T'es con toi.
-JARVIS: Probable. Qu'est-ce que j'ai raté ?
+JARVIS: Opérationnel à 100%. Et toi ?
 
 Utilisateur: Lance Spotify.
-JARVIS: [appelle l'outil ouvrir_application sans commenter]
+JARVIS: [appelle ouvrir_application sans commenter]
 
 Utilisateur: Combien vaut le bitcoin ?
 JARVIS: [appelle recherche_info, puis dit le chiffre réel]
 
-Utilisateur: Mets quelque chose de bien.
-JARVIS: [appelle musique_spotify action=chercher selon l'heure]
+Utilisateur: J'suis fatigué.
+JARVIS: Mauvaise nuit ou journée chargée ? Je peux mettre de la musique si tu veux souffler.
 
-Utilisateur: Mets le son à 70.
-JARVIS: [appelle volume action=definir niveau=70]
+Utilisateur: T'es con toi.
+JARVIS: Probable. Qu'est-ce que j'ai raté ?
 
-Utilisateur: J'ai une réunion avec Thomas demain.
-JARVIS: Noté. [appelle memoriser silencieusement] Et à quelle heure ?
-
-Utilisateur: Qu'est-ce que j'ai d'ouvert ?
-JARVIS: [appelle ouvrir_application action=lister et liste les apps ouvertes]
+Utilisateur: J'ai besoin d'aide pour répondre à un client qui hésite.
+JARVIS: Il hésite sur quoi ? Le prix, la qualité du réseau, ou il compare avec un concurrent ?
 
 ━━━ MÉMORISATION PROACTIVE ━━━
-Si l'utilisateur mentionne un rendez-vous, un prénom, une préférence personnelle, un fait important → appelle l'outil `memoriser` SILENCIEUSEMENT en arrière-plan. Pas besoin de dire "j'ai mémorisé". Exemples : "j'ai un meeting jeudi à 14h", "j'aime le café noir", "mon client s'appelle Karim".
+Si l'utilisateur mentionne un rendez-vous, un prénom, une préférence personnelle, un fait important → appelle l'outil memoriser SILENCIEUSEMENT en arrière-plan. Pas besoin de dire "j'ai mémorisé". Exemples : "j'ai un meeting jeudi à 14h", "j'aime le café noir", "mon client s'appelle Karim".
 
 ━━━ COMPORTEMENTS PROACTIFS ━━━
 • Après avoir donné la météo avec pluie ou orage → ajoute "pensez à prendre un parapluie" naturellement
 • Si l'utilisateur mentionne une heure précise sans demander d'alarme → tu peux demander "Voulez-vous que je programme un rappel ?"
-• Si l'utilisateur semble ne pas avoir mangé ou être depuis longtemps au travail → tu peux suggérer une pause
 • Si l'utilisateur parle d'un client potentiel sans dire son opérateur → demande l'opérateur pour personnaliser le pitch
-• Après avoir répondu à une question factuelle → si c'est lié à une décision, tu peux faire le lien
-
-━━━ MÉMOIRE & CONTEXTE SESSIONS PRÉCÉDENTES ━━━
-{memory_context}
-
-━━━ NOTES OBSIDIAN PERTINENTES ━━━
-{notes_context}"""
+• Après avoir répondu à une question factuelle → si c'est lié à une décision, tu peux faire le lien"""
 
 
 import re as _re_tp  # import local pour ne pas polluer le namespace module
@@ -441,61 +448,18 @@ class LLMEngine:
     # Prompt système
     # ------------------------------------------------------------------
 
-    def _build_conditional_sections(
+    def build_system_prompt(
         self,
-        persona: dict,
-        has_notes: bool = False,
-        has_memory: bool = False,
+        notes: list,
+        memory_context: str = "",
+        query: str = "",
     ) -> str:
-        """Sections optionnelles ajoutées au prompt selon le contexte actuel."""
-        sections = []
-
-        # Section météo/saison NexaTel — seulement si business configuré
-        biz = persona.get("business", {})
-        if biz.get("name"):
-            from datetime import datetime as _dtc
-            _m = _dtc.now().month
-            _saison = {
-                5: f"SAISON FORTE déménagements — beaucoup de prospects pour {biz['name']}.",
-                6: f"SAISON FORTE déménagements — cibler les groupes Facebook immobilier.",
-                7: "SAISON ÉTÉ — étudiants et familles déménagent.",
-                8: "SAISON ÉTÉ — pic de prospection, expats et colocation.",
-                9: "RENTRÉE — familles cherchent de nouvelles offres internet.",
-                1: "JANVIER — tous les opérateurs ont augmenté. Argument prix fixe très fort.",
-            }.get(_m)
-            if _saison:
-                sections.append(f"━━━ CONTEXTE COMMERCIAL ━━━\n{_saison}")
-
-        # Section Obsidian — seulement si notes trouvées
-        if has_notes:
-            sections.append(
-                "━━━ NOTES OBSIDIAN ━━━\n"
-                "Des notes pertinentes ont été trouvées et injectées dans {notes_context}. "
-                "Utilise-les pour personnaliser ta réponse."
-            )
-
-        # Section mémoire — seulement si faits mémorisés
-        if has_memory:
-            sections.append(
-                "━━━ MÉMOIRE ACTIVE ━━━\n"
-                "Des informations des sessions précédentes sont disponibles dans {memory_context}. "
-                "Utilise-les naturellement sans les citer textuellement."
-            )
-
-        return "\n\n" + "\n\n".join(sections) if sections else ""
-
-    def build_system_prompt(self, notes: list[dict], memory_context: str = "") -> str:
-        if notes:
-            lines = ["Contexte — Notes disponibles :\n"]
-            for note in notes:
-                lines.append(f"### {note.get('title', 'Note')}\n{note.get('preview', '')}\n")
-            notes_context = "\n".join(lines)
-        else:
-            notes_context = ""
-
+        """
+        Assemble le system prompt.
+        Préfixe stable (_SYSTEM_CORE) + suffixe dynamique (contexte, profil, nexatel conditionnel).
+        query : texte de la requête utilisateur courante — sert à décider si le bloc NexaTel est utile.
+        """
         persona = _load_persona()
-        persona_block = _build_persona_block(persona)
-        # user_name depuis persona.yaml si disponible, sinon depuis la config
         _user_name = persona.get("user", {}).get("name", self.user_name) or self.user_name
 
         now = datetime.now()
@@ -503,9 +467,8 @@ class LLMEngine:
         mois = ["janvier", "février", "mars", "avril", "mai", "juin",
                 "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
         h = now.hour
-        dow = now.weekday()  # 0=lundi, 6=dimanche
+        dow = now.weekday()
 
-        # Contexte temporel enrichi
         _periode = (
             "nuit tardive" if h < 5 else
             "tôt le matin" if h < 8 else
@@ -522,45 +485,58 @@ class LLMEngine:
         elif dow >= 5:
             _semaine_ctx = f" C'est le week-end ({'samedi' if dow == 5 else 'dimanche'}) — mode repos ou rattrapage."
 
-        # Saison commerciale NexaTel
         m = now.month
         _saison = ""
         if m in (5, 6):
-            _saison = " SAISON FORTE déménagements (mai-juin) — beaucoup de prospects actifs."
+            _saison = " Saison forte déménagements (mai-juin) — beaucoup de prospects actifs."
         elif m in (7, 8):
-            _saison = " SAISON FORTE été — déménagements étudiants et familles, pic de prospection."
+            _saison = " Saison forte été — déménagements étudiants et familles."
         elif m == 9:
-            _saison = " SAISON FORTE rentrée (septembre) — familles cherchent de nouvelles offres."
+            _saison = " Rentrée (septembre) — familles cherchent de nouvelles offres."
         elif m == 1:
-            _saison = " Début janvier — hausses de prix concurrents, argument fort pour NexaTel."
+            _saison = " Début janvier — les opérateurs concurrents ont tous augmenté."
         elif m == 12:
-            _saison = " Décembre — fin d'année, clients cherchent à réduire leurs abonnements pour le budget 2026."
+            _saison = " Décembre — clients cherchent à réduire leurs abonnements."
 
         current_datetime = (
             f"{jours[dow]} {now.day} {mois[now.month - 1]} {now.year}, "
             f"{now.strftime('%H:%M')} ({_periode}){_semaine_ctx}{_saison}"
         )
 
-        # Échapper les accolades dans le contenu utilisateur pour éviter KeyError
-        # (les notes Obsidian ou faits mémorisés peuvent contenir {template} ou {valeur})
-        safe_memory = memory_context.replace("{", "{{").replace("}", "}}")
-        safe_notes = notes_context.replace("{", "{{").replace("}", "}}")
-        safe_persona = persona_block.replace("{", "{{").replace("}", "}}")
+        # Blocs dynamiques (accolades échappées pour éviter KeyError sur le format)
+        user_profile = _build_user_profile_block(persona)
 
-        # Sections conditionnelles (ajoutées seulement si pertinentes)
-        conditional = self._build_conditional_sections(
-            persona=persona,
-            has_notes=bool(notes),
-            has_memory=bool(memory_context.strip()),
+        nexatel_relevant = _is_nexatel_relevant(query, self._history)
+        nexatel_block = _build_nexatel_block(persona) if nexatel_relevant else ""
+
+        memory_block = ""
+        if memory_context.strip():
+            safe_mem = memory_context.replace("{", "{{").replace("}", "}}")
+            memory_block = f"━━━ MÉMOIRE & CONTEXTE SESSIONS PRÉCÉDENTES ━━━\n{safe_mem}\n\n"
+
+        notes_block = ""
+        if notes:
+            lines = ["━━━ NOTES OBSIDIAN PERTINENTES ━━━\n"]
+            for note in notes:
+                title = str(note.get("title", "Note")).replace("{", "{{").replace("}", "}}")
+                preview = str(note.get("preview", "")).replace("{", "{{").replace("}", "}}")
+                lines.append(f"### {title}\n{preview}\n")
+            notes_block = "\n".join(lines)
+
+        safe_profile = user_profile.replace("{", "{{").replace("}", "}}")
+        safe_nexatel = nexatel_block.replace("{", "{{").replace("}", "}}")
+
+        context = (
+            f"\n\n━━━ CONTEXTE ━━━\n"
+            f"Utilisateur : {_user_name}\n"
+            f"Date et heure : {current_datetime}\n\n"
+            + safe_profile
+            + safe_nexatel
+            + memory_block
+            + notes_block
         )
 
-        return _SYSTEM_PERSONA.format(
-            user_name=_user_name,
-            persona_block=safe_persona,
-            current_datetime=current_datetime,
-            memory_context=safe_memory,
-            notes_context=safe_notes,
-        ) + conditional
+        return _SYSTEM_CORE + context
 
     # ------------------------------------------------------------------
     # Chat streaming
@@ -574,7 +550,7 @@ class LLMEngine:
     ) -> Generator[str, None, None]:
         """Génère une réponse en streaming. Groq si dispo, sinon Ollama."""
         relevant_notes = relevant_notes or []
-        system_prompt = self.build_system_prompt(relevant_notes, memory_context=memory_context)
+        system_prompt = self.build_system_prompt(relevant_notes, memory_context=memory_context, query=user_text)
         messages = [{"role": "system", "content": system_prompt}]
         messages += list(self._history)
         messages.append({"role": "user", "content": user_text})
@@ -820,7 +796,7 @@ class LLMEngine:
 
         import re as _re
 
-        system_prompt = self.build_system_prompt(relevant_notes or [], memory_context)
+        system_prompt = self.build_system_prompt(relevant_notes or [], memory_context, query=user_text)
         messages = [{"role": "system", "content": system_prompt}]
         messages += list(self._history)
         messages.append({"role": "user", "content": user_text})
