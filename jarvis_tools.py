@@ -411,6 +411,8 @@ def _describe_screen_groq() -> str:
 
 def execute_tool(name: str, args: dict, persistent_memory=None, tts=None) -> str:
     """Exécute un outil et retourne le résultat textuel."""
+    _t0 = time.time()
+    logger.info(f"[TOOL] {name}({list(args.keys())}) start")
     try:
         if name == "ouvrir_application":
             action = args.get("action", "ouvrir")
@@ -871,9 +873,14 @@ def execute_tool(name: str, args: dict, persistent_memory=None, tts=None) -> str
                     stock_ticker = m.group(1)
             if stock_ticker:
                 try:
-                    import yfinance as yf
-                    t = yf.Ticker(stock_ticker)
-                    hist = t.history(period="2d")
+                    import concurrent.futures as _cf_yf
+                    def _yf_fetch(_ticker=stock_ticker):
+                        import yfinance as _yf
+                        return _yf.Ticker(_ticker).history(period="2d")
+                    _t_yf = time.time()
+                    with _cf_yf.ThreadPoolExecutor(max_workers=1) as _ex:
+                        hist = _ex.submit(_yf_fetch).result(timeout=8)
+                    logger.debug(f"yfinance {stock_ticker} → {time.time()-_t_yf:.2f}s")
                     if not hist.empty:
                         price = hist["Close"].iloc[-1]
                         prev = hist["Close"].iloc[-2] if len(hist) >= 2 else price
@@ -1168,5 +1175,5 @@ def execute_tool(name: str, args: dict, persistent_memory=None, tts=None) -> str
             return f"Outil inconnu : {name}"
 
     except Exception as e:
-        logger.error(f"Erreur outil {name} : {e}")
+        logger.error(f"[TOOL] {name} ERREUR ({time.time()-_t0:.2f}s) : {e}")
         return f"Erreur lors de l'exécution de {name}."

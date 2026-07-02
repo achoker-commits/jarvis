@@ -1260,7 +1260,11 @@ class LLMEngine:
         """
         import re as _re_mf
 
-        _MF_COMPLETE = _re_mf.compile(r'<function=(\w+)(.*?)</function>', _re_mf.DOTALL)
+        # Toutes les variantes connues de llama-3.3 :
+        # 1. <function=NAME{...}</function>         (standard)
+        # 2. <function=NAME{...}></function>        (}> avant </function>)
+        # 3. <function=NAME>{...}</function>        (> après nom, JSON séparé)
+        _MF_COMPLETE = _re_mf.compile(r'<function=(\w+)>?\s*(.*?)>?\s*</function>', _re_mf.DOTALL)
         _MF_PARTIAL = "<function="
 
         def _parse_inline(m) -> None:
@@ -1324,6 +1328,18 @@ class LLMEngine:
                         self._last_response += _pre
                         yield _pre
                     _parse_inline(_m)
+                elif _MF_PARTIAL in _buf:
+                    # Tool call partiel sans </function> (stream tronqué par max_tokens)
+                    # → récupérer sans rien yielder vers le TTS
+                    _ppos = _buf.find(_MF_PARTIAL)
+                    _pre = _buf[:_ppos]
+                    if _pre:
+                        self._last_response += _pre
+                        yield _pre
+                    _pm = _re_mf.search(r'<function=(\w+)>?\s*(.*)', _buf[_ppos:], _re_mf.DOTALL)
+                    if _pm:
+                        logger.warning(f"[JARVIS] Tool call partiel (stream tronqué) : {_pm.group(1)}")
+                        _parse_inline(_pm)
                 else:
                     self._last_response += _buf
                     yield _buf

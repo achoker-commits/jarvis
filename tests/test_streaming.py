@@ -273,3 +273,87 @@ def test_cas5_no_false_positive_function_word():
     yielded = list(gen)
     assert "".join(yielded) == text
     assert not tc["is_tool"]
+
+
+# ── Cas 6 : variantes du format inline (régression 2026-07-02) ───────────────
+
+def test_cas6_closing_bracket_gt_variant():
+    """`<function=NAME{...}></function>` — '}>' avant '</function>' (régression réelle)."""
+    import json
+    llm = _new_llm()
+    tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+    gen = llm._make_stream_gen(
+        iter([_mk_text('<function=recherche_info{"requete": "test"}></function>')]),
+        tc,
+    )
+    yielded = list(gen)
+    assert "<function=" not in "".join(yielded)
+    assert tc["is_tool"]
+    assert tc["name"] == "recherche_info"
+    assert json.loads(tc["args"]) == {"requete": "test"}
+
+
+def test_cas6_html_style_tag():
+    """`<function=NAME>{"k":"v"}</function>` — '>' après le nom, JSON en corps."""
+    import json
+    llm = _new_llm()
+    tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+    gen = llm._make_stream_gen(
+        iter([_mk_text('<function=meteo>{"ville": "Paris"}</function>')]),
+        tc,
+    )
+    yielded = list(gen)
+    assert "<function=" not in "".join(yielded)
+    assert tc["is_tool"]
+    assert tc["name"] == "meteo"
+    assert json.loads(tc["args"]) == {"ville": "Paris"}
+
+
+def test_cas6_no_closing_tag_stream_truncated():
+    """Stream tronqué : `<function=NAME{...}>` sans `</function>` → pas yielded, outil récupéré."""
+    llm = _new_llm()
+    tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+    gen = llm._make_stream_gen(
+        iter([_mk_text('<function=volume{"action": "monter"}>')]),
+        tc,
+    )
+    yielded = list(gen)
+    # Le fragment malformé ne doit PAS être transmis au TTS
+    assert "<function=" not in "".join(yielded)
+    # L'outil doit être détecté
+    assert tc["is_tool"]
+    assert tc["name"] == "volume"
+
+
+def test_cas6_orphan_tag_only():
+    """`<function=NAME>` seul sans JSON ni fermeture → silencieux, outil détecté."""
+    llm = _new_llm()
+    tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+    gen = llm._make_stream_gen(
+        iter([_mk_text("<function=systeme>")]),
+        tc,
+    )
+    yielded = list(gen)
+    assert "<function=" not in "".join(yielded)
+    assert tc["is_tool"]
+    assert tc["name"] == "systeme"
+
+
+def test_cas6_pre_text_then_closing_gt():
+    """Texte légitime + `<function=NAME{...}></function>` → texte yielded, outil détecté."""
+    import json
+    llm = _new_llm()
+    tc = {"is_tool": False, "id": "", "name": "", "args": ""}
+    gen = llm._make_stream_gen(
+        iter([
+            _mk_text("Je cherche ça pour vous."),
+            _mk_text('<function=recherche_info{"requete": "belgique"}></function>'),
+        ]),
+        tc,
+    )
+    yielded = list(gen)
+    all_text = "".join(yielded)
+    assert "<function=" not in all_text
+    assert "Je cherche ça pour vous." in all_text
+    assert tc["is_tool"]
+    assert json.loads(tc["args"]) == {"requete": "belgique"}

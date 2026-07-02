@@ -381,11 +381,15 @@ class TTSEngine:
                         sentence = self._clean_for_tts(sentence)
                         if not sentence:
                             continue
+                        _t_gen = time.time()
                         cached = self._load_from_file_cache(sentence)
                         if cached:
+                            logger.debug(f"TTS cache hit ({len(sentence)}c)")
                             audio_queue.put(cached)
                         else:
                             audio = self._edge_tts_bytes_sync(sentence)
+                            _gen_ms = int((time.time() - _t_gen) * 1000)
+                            logger.debug(f"TTS gen {len(sentence)}c → {_gen_ms}ms")
                             if audio:
                                 self._save_to_file_cache(sentence, audio)
                                 audio_queue.put(audio)
@@ -486,8 +490,9 @@ class TTSEngine:
     def _clean_for_tts(text: str) -> str:
         """Supprime le markdown et les artefacts visuels pour une lecture vocale naturelle."""
         import re as _re
-        # Tool calls inline malformés (2e ligne de défense après _make_stream_gen)
-        text = _re.sub(r'<function=\w+.*?</function>', '', text, flags=_re.DOTALL)
+        # Tool calls inline malformés — 2e ligne de défense (toutes variantes + orphelins)
+        text = _re.sub(r'<function=\w+>?\s*.*?</function>', '', text, flags=_re.DOTALL)
+        text = _re.sub(r'<function=\w+[^<]*>?', '', text)   # tags orphelins sans </function>
         # Blocs de code
         text = _re.sub(r'```[^`]*```', '', text, flags=_re.DOTALL)
         text = _re.sub(r'`([^`]+)`', r'\1', text)
